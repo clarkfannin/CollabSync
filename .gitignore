@@ -1,0 +1,22 @@
+# Build artifacts
+build/
+*.o
+*.a
+
+# macOS
+.DS_Store
+
+# JUCE framework (add as submodule separately if needed)
+JUCE/
+
+# Xcode
+*.xcuserstate
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt

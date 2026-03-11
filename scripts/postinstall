@@ -1,0 +1,16 @@
+#!/bin/bash
+# Runs as root after the pkg installs files.
+# Ad-hoc signs the plugins so Gatekeeper doesn't block them.
+
+VST3="/Library/Audio/Plug-Ins/VST3/CollabSync.vst3"
+AU="/Library/Audio/Plug-Ins/Components/CollabSync.component"
+
+for PLUGIN in "$VST3" "$AU"; do
+    if [ -e "$PLUGIN" ]; then
+        xattr -rd com.apple.quarantine "$PLUGIN" 2>/dev/null || true
+        codesign --force --deep -s - "$PLUGIN"
+        echo "Signed: $PLUGIN"
+    fi
+done
+
+exit 0
