@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(CollabSync VERSION 0.1.0)
+project(CollabSync VERSION 0.4.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,6 +36,7 @@ target_sources(CollabSync PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/Network/SignalingClient.cpp
+    Source/Network/SignalingServer.cpp
     Source/Network/PeerConnection.cpp
     Source/Audio/OpusCodec.cpp
     Source/Audio/JitterBuffer.cpp

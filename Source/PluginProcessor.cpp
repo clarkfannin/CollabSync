@@ -6,6 +6,7 @@ CollabSyncProcessor::CollabSyncProcessor()
         .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
         .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
+    signalingServer = std::make_unique<SignalingServer>();
     clock      = std::make_unique<SessionClock>();
     midiCapture = std::make_unique<MidiCapture>();
     jitterBuffer = std::make_unique<JitterBuffer> (20, 80); // 20ms target, 80ms max
@@ -468,6 +469,40 @@ juce::AudioProcessorEditor* CollabSyncProcessor::createEditor()
     return new CollabSyncEditor (*this);
 }
 
+//==============================================================================
+void CollabSyncProcessor::startSessionServer()
+{
+    signalingServer->start();
+    // Auto-fill host input to localhost when hosting locally
+    signalingHost = "localhost";
+}
+
+void CollabSyncProcessor::stopSessionServer()
+{
+    signalingServer->stop();
+}
+
+bool CollabSyncProcessor::isHostingSession() const
+{
+    return signalingServer->getState() == SignalingServer::State::Listening;
+}
+
+int CollabSyncProcessor::getSessionPeerCount() const
+{
+    return signalingServer->getJoinedCount();
+}
+
+juce::String CollabSyncProcessor::getSessionTailscaleIP() const
+{
+    return signalingServer->getTailscaleIP();
+}
+
+juce::String CollabSyncProcessor::getSessionErrorMessage() const
+{
+    return signalingServer->getErrorMessage();
+}
+
+//==============================================================================
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new CollabSyncProcessor();

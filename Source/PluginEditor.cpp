@@ -25,7 +25,7 @@ void CollabSyncEditor::styleButton (juce::TextButton& b, juce::Colour col)
 CollabSyncEditor::CollabSyncEditor (CollabSyncProcessor& p)
     : AudioProcessorEditor (&p), proc (p)
 {
-    setSize (380, 620);
+    setSize (380, 680);
 
     // ---- Header ----
     titleLabel.setText (juce::String ("CollabSync v") + COLLABSYNC_VERSION, juce::dontSendNotification);
@@ -97,6 +97,35 @@ CollabSyncEditor::CollabSyncEditor (CollabSyncProcessor& p)
     showInFinderButton.onClick = [this] {
         if (proc.lastSessionDir.isDirectory())
             proc.lastSessionDir.revealToUser();
+    };
+
+    // ---- Session hosting ----
+    styleSectionLabel (sessionSectionLabel, "HOST A SESSION");
+    addAndMakeVisible (sessionSectionLabel);
+
+    styleButton (startSessionButton, juce::Colour (0xff2a6a3a));
+    styleButton (stopSessionButton,  juce::Colour (0xff383848));
+    styleButton (copyIPButton,       juce::Colour (0xff2a3a4a));
+    addAndMakeVisible (startSessionButton);
+    addChildComponent (stopSessionButton);
+    addChildComponent (tailscaleIPLabel);
+    addChildComponent (copyIPButton);
+
+    sessionStatusLabel.setFont (juce::FontOptions (11.0f));
+    sessionStatusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8888aa));
+    sessionStatusLabel.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (sessionStatusLabel);
+
+    tailscaleIPLabel.setFont (juce::FontOptions (12.0f));
+    tailscaleIPLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
+    tailscaleIPLabel.setJustificationType (juce::Justification::centredLeft);
+
+    startSessionButton.onClick = [this] { proc.startSessionServer(); updateUI(); };
+    stopSessionButton.onClick  = [this] { proc.stopSessionServer();  updateUI(); };
+    copyIPButton.onClick       = [this] {
+        auto ip = proc.getSessionTailscaleIP();
+        if (ip.isNotEmpty())
+            juce::SystemClipboard::copyTextToClipboard (ip);
     };
 
     // ---- Device section labels ----
@@ -239,6 +268,37 @@ void CollabSyncEditor::resized()
     recordButton.setBounds (x, y, w, 34);
     y += 38;
 
+    // Session hosting
+    sessionSectionLabel.setBounds (x, y, w, 16);
+    y += 20;
+
+    bool hosting = proc.isHostingSession();
+
+    startSessionButton.setVisible (! hosting);
+    stopSessionButton.setVisible  (hosting);
+    tailscaleIPLabel.setVisible   (hosting);
+    copyIPButton.setVisible       (hosting);
+
+    if (hosting)
+    {
+        sessionStatusLabel.setBounds (x, y, w, 18);
+        y += 22;
+
+        int ipW = w - 72;
+        tailscaleIPLabel.setBounds (x,        y, ipW, 26);
+        copyIPButton.setBounds     (x + ipW + 4, y, 68, 26);
+        y += 30;
+        stopSessionButton.setBounds (x, y, w, 28);
+        y += 32;
+    }
+    else
+    {
+        sessionStatusLabel.setBounds (x, y, w, 18);
+        y += 22;
+        startSessionButton.setBounds (x, y, w, 28);
+        y += 32;
+    }
+
     // Diagnostics
     diagLabel.setBounds (x, y, w, 14);
     y += 18;
@@ -334,6 +394,10 @@ void CollabSyncEditor::timerCallback()
         repaint();
     }
 
+    // Refresh session hosting status every tick (peer count can change any time)
+    if (proc.isHostingSession() || ! proc.getSessionErrorMessage().isEmpty())
+        updateUI();
+
     static int devTick = 0;
     if (++devTick >= 32) { devTick = 0; refreshDevices(); }
 }
@@ -366,6 +430,49 @@ void CollabSyncEditor::updateUI()
 
     recordButton.setButtonText (recording ? "Stop" : "Record");
     styleButton (recordButton, recording ? juce::Colour (0xff881111) : juce::Colour (0xffbb2222));
+
+    // Session hosting status
+    bool hosting = proc.isHostingSession();
+    auto sessionErr = proc.getSessionErrorMessage();
+
+    if (! proc.getSessionErrorMessage().isEmpty())
+    {
+        sessionStatusLabel.setText (sessionErr.isEmpty() ? "Error starting server" : sessionErr,
+                                    juce::dontSendNotification);
+        sessionStatusLabel.setColour (juce::Label::textColourId, juce::Colours::orangered);
+    }
+    else if (hosting)
+    {
+        int joined = proc.getSessionPeerCount();
+        juce::String statusText = joined == 0 ? "Waiting for peer..."
+                                : joined == 1 ? "● Peer connected"
+                                              : "● Session active";
+        juce::Colour statusCol  = joined == 0 ? juce::Colour (0xff8888aa)
+                                : joined >= 1 ? juce::Colours::limegreen
+                                              : juce::Colours::limegreen;
+
+        sessionStatusLabel.setText  (statusText, juce::dontSendNotification);
+        sessionStatusLabel.setColour (juce::Label::textColourId, statusCol);
+
+        auto ip = proc.getSessionTailscaleIP();
+        tailscaleIPLabel.setText (ip.isEmpty() ? "Tailscale not detected" : ip,
+                                  juce::dontSendNotification);
+        tailscaleIPLabel.setColour (juce::Label::textColourId,
+                                    ip.isEmpty() ? juce::Colours::orangered
+                                                 : juce::Colours::white);
+        copyIPButton.setEnabled (ip.isNotEmpty());
+    }
+    else
+    {
+        auto ip = proc.getSessionTailscaleIP();
+        sessionStatusLabel.setText (ip.isEmpty() ? "Install Tailscale to host sessions"
+                                                 : "Start a session for your friend to join",
+                                    juce::dontSendNotification);
+        sessionStatusLabel.setColour (juce::Label::textColourId,
+                                      ip.isEmpty() ? juce::Colours::orangered
+                                                   : juce::Colour (0xff8888aa));
+        startSessionButton.setEnabled (true);
+    }
 
     if (hasSession) rebuildFileTiles();
     resized();

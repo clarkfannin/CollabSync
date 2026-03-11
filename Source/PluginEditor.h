@@ -106,6 +106,14 @@ private:
     juce::OwnedArray<DeviceRow> midiRows, audioInputRows, audioOutputRows;
     juce::Label midiEmptyLabel, audioInputEmptyLabel, audioOutputEmptyLabel;
 
+    // Session hosting
+    juce::Label      sessionSectionLabel;
+    juce::TextButton startSessionButton  { "Start Session" };
+    juce::TextButton stopSessionButton   { "Stop Session"  };
+    juce::Label      sessionStatusLabel;
+    juce::Label      tailscaleIPLabel;
+    juce::TextButton copyIPButton        { "Copy IP" };
+
     // Diagnostics
     juce::Label diagLabel;
 

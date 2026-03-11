@@ -5,14 +5,8 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$PROJECT_DIR/build"
 DIST_DIR="$PROJECT_DIR/dist"
 SCRIPTS_DIR="$PROJECT_DIR/scripts"
-VERSION="0.3.0"
+VERSION="0.4.0"
 PKG_NAME="CollabSync-$VERSION.pkg"
-
-echo "==> Building CollabSync..."
-cd "$PROJECT_DIR"
-cmake -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" 2>/dev/null
-cmake --build "$BUILD_DIR"
 
 echo "==> Gathering plugin bundles..."
 VST3_SRC="/Library/Audio/Plug-Ins/VST3/CollabSync.vst3"

@@ -1,9 +1,10 @@
 #pragma once
 
-#define COLLABSYNC_VERSION "0.3.0"
+#define COLLABSYNC_VERSION "0.4.0"
 
 #include <JuceHeader.h>
 #include "Network/PeerConnection.h"
+#include "Network/SignalingServer.h"
 #include "Audio/OpusCodec.h"
 #include "Audio/JitterBuffer.h"
 #include "Audio/SharedAudioBuffer.h"
@@ -57,6 +58,14 @@ public:
     void triggerRecord (); // sends countdown to both peers, then starts recording
     void triggerStop   (); // stops recording on both peers
 
+    // Session hosting (built-in signaling server)
+    void startSessionServer();
+    void stopSessionServer();
+    bool isHostingSession()    const;
+    int  getSessionPeerCount() const;
+    juce::String getSessionTailscaleIP()  const;
+    juce::String getSessionErrorMessage() const;
+
     // PeerConnection::Listener — countdown/stop
     void onCountdownReceived (float bpm) override;
     void onStopReceived      ()          override;
@@ -89,7 +98,8 @@ private:
     std::vector<uint8_t> midiRecvData;
 
     // Core components
-    std::unique_ptr<PeerConnection> peer;
+    std::unique_ptr<PeerConnection>   peer;
+    std::unique_ptr<SignalingServer>  signalingServer;
     std::unique_ptr<OpusEncoder>    encoder;
     std::unique_ptr<OpusDecoder>    decoder;
     std::unique_ptr<JitterBuffer>   jitterBuffer;
