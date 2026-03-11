@@ -472,9 +472,12 @@ juce::AudioProcessorEditor* CollabSyncProcessor::createEditor()
 //==============================================================================
 void CollabSyncProcessor::startSessionServer()
 {
-    signalingServer->start();
-    // Auto-fill host input to localhost when hosting locally
-    signalingHost = "localhost";
+    signalingServer->start(); // blocks until listening (or error)
+    if (signalingServer->getState() != SignalingServer::State::Listening) return;
+
+    // Auto-connect the host to their own server with a fixed room code.
+    // The guest uses the same fixed code — no manual entry needed.
+    connect ("SYNC", "localhost");
 }
 
 void CollabSyncProcessor::stopSessionServer()
@@ -500,6 +503,11 @@ juce::String CollabSyncProcessor::getSessionTailscaleIP() const
 juce::String CollabSyncProcessor::getSessionErrorMessage() const
 {
     return signalingServer->getErrorMessage();
+}
+
+juce::String CollabSyncProcessor::getLocalTailscaleIP() const
+{
+    return SignalingServer::detectTailscaleIP();
 }
 
 //==============================================================================

@@ -21,6 +21,7 @@ void SignalingServer::start()
 
     joinedCount.store (0);
     state.store (State::Stopped);
+    readyEvent.reset();
 
     {
         std::lock_guard<std::mutex> lock (roomsMutex);
@@ -28,6 +29,7 @@ void SignalingServer::start()
     }
 
     startThread();
+    readyEvent.wait (1000); // block until listening or error (usually <5ms)
 }
 
 void SignalingServer::stop()
@@ -73,10 +75,12 @@ void SignalingServer::run()
         std::lock_guard<std::mutex> lock (metaMutex);
         errorMessage = "Port 8765 already in use";
         state.store (State::Error);
+        readyEvent.signal();
         return;
     }
 
     state.store (State::Listening);
+    readyEvent.signal();
 
     while (! threadShouldExit())
     {
@@ -219,13 +223,13 @@ juce::String SignalingServer::getRemoteIP (juce::StreamingSocket* sock)
 
     struct sockaddr_storage addr {};
     socklen_t len = sizeof (addr);
-    if (::getpeername (fd, (struct sockaddr*) &addr, &len) != 0) return {};
+    if (getpeername (fd, (struct sockaddr*) &addr, &len) != 0) return {};
 
     char buf[INET6_ADDRSTRLEN] = {};
     if (addr.ss_family == AF_INET)
-        ::inet_ntop (AF_INET, &((struct sockaddr_in*) &addr)->sin_addr, buf, sizeof (buf));
+        inet_ntop (AF_INET, &((struct sockaddr_in*) &addr)->sin_addr, buf, sizeof (buf));
     else
-        ::inet_ntop (AF_INET6, &((struct sockaddr_in6*) &addr)->sin6_addr, buf, sizeof (buf));
+        inet_ntop (AF_INET6, &((struct sockaddr_in6*) &addr)->sin6_addr, buf, sizeof (buf));
 
     juce::String ip (buf);
     if (ip.startsWith ("::ffff:")) ip = ip.substring (7);
@@ -240,7 +244,7 @@ juce::String SignalingServer::detectTailscaleIP()
 {
 #if JUCE_MAC || JUCE_LINUX
     struct ifaddrs* ifap = nullptr;
-    if (::getifaddrs (&ifap) != 0) return {};
+    if (getifaddrs (&ifap) != 0) return {};
 
     juce::String result;
     for (auto* p = ifap; p != nullptr; p = p->ifa_next)
@@ -248,19 +252,19 @@ juce::String SignalingServer::detectTailscaleIP()
         if (p->ifa_addr == nullptr || p->ifa_addr->sa_family != AF_INET) continue;
 
         auto*    sin  = reinterpret_cast<struct sockaddr_in*> (p->ifa_addr);
-        uint32_t addr = ::ntohl (sin->sin_addr.s_addr);
+        uint32_t addr = ntohl (sin->sin_addr.s_addr);
 
         // Tailscale allocates from 100.64.0.0/10 (CGNAT range)
         if ((addr & 0xFFC00000u) == 0x64400000u)
         {
             char buf[INET_ADDRSTRLEN] = {};
-            ::inet_ntop (AF_INET, &sin->sin_addr, buf, sizeof (buf));
+            inet_ntop (AF_INET, &sin->sin_addr, buf, sizeof (buf));
             result = buf;
             break;
         }
     }
 
-    ::freeifaddrs (ifap);
+    freeifaddrs (ifap);
     return result;
 #else
     return {};

@@ -31,13 +31,15 @@ public:
     juce::String getTailscaleIP()  const;
     juce::String getErrorMessage() const;
 
+    // Can be called any time — does not require the server to be running.
+    static juce::String detectTailscaleIP();
+
 private:
     void run() override;
     void serveClient (juce::StreamingSocket* sock);
 
-    static void         sendLine      (juce::StreamingSocket* sock, const juce::String& msg);
-    static juce::String getRemoteIP   (juce::StreamingSocket* sock);
-    static juce::String detectTailscaleIP();
+    static void         sendLine    (juce::StreamingSocket* sock, const juce::String& msg);
+    static juce::String getRemoteIP (juce::StreamingSocket* sock);
 
     std::atomic<State> state       { State::Stopped };
     std::atomic<int>   joinedCount { 0 };
@@ -56,8 +58,10 @@ private:
     std::mutex                                    roomsMutex;
     std::map<juce::String, std::vector<PeerSlot>> rooms;
 
-    std::mutex                         clientsMutex;
+    std::mutex                          clientsMutex;
     std::vector<juce::StreamingSocket*> clientSockets;
+
+    juce::WaitableEvent readyEvent { true }; // signalled when listening (or error)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SignalingServer)
 };

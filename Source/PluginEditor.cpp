@@ -83,9 +83,8 @@ CollabSyncEditor::CollabSyncEditor (CollabSyncProcessor& p)
     addChildComponent (showInFinderButton);
 
     connectButton.onClick    = [this] {
-        auto code = roomInput.getText().trim().toUpperCase();
         auto host = hostInput.getText().trim();
-        if (code.isNotEmpty()) proc.connect (code, host);
+        proc.connect ("SYNC", host); // room code is fixed; users only need the host IP
     };
     disconnectButton.onClick = [this] { proc.disconnect(); };
     recordButton.onClick     = [this] {
@@ -257,11 +256,11 @@ void CollabSyncEditor::resized()
     hostInput.setBounds (x + 42, y, w - 42, 28);
     y += 34;
 
-    // Room row
-    roomLabel.setBounds (x, y, 38, 28);
+    // Connect / disconnect row (room code is hidden — fixed to "SYNC" internally)
+    roomLabel.setVisible (false);
+    roomInput.setVisible (false);
     disconnectButton.setBounds (x + w - 84,  y, 84, 28);
     connectButton.setBounds    (x + w - 172, y, 84, 28);
-    roomInput.setBounds        (x + 42, y, w - 42 - 176, 28);
     y += 34;
 
     // Record button
@@ -424,7 +423,7 @@ void CollabSyncEditor::updateUI()
     statusLabel.setText  (statusText, juce::dontSendNotification);
     statusLabel.setColour (juce::Label::textColourId, statusCol);
 
-    connectButton.setEnabled    (! connected && ! countingDown);
+    connectButton.setEnabled    (! connected && ! countingDown && ! hosting);
     disconnectButton.setEnabled (connected && ! recording && ! countingDown);
     recordButton.setEnabled     (connected && ! countingDown);
 
@@ -432,47 +431,53 @@ void CollabSyncEditor::updateUI()
     styleButton (recordButton, recording ? juce::Colour (0xff881111) : juce::Colour (0xffbb2222));
 
     // Session hosting status
-    bool hosting = proc.isHostingSession();
-    auto sessionErr = proc.getSessionErrorMessage();
+    // Use isConnected() (P2P UDP link) not joinedCount (TCP signaling) —
+    // peers disconnect from signaling as soon as they've exchanged IPs.
+    bool    hosting    = proc.isHostingSession();
+    auto    sessionErr = proc.getSessionErrorMessage();
+    auto    tsIP       = proc.getLocalTailscaleIP(); // works regardless of server state
+    bool    hasTSIP    = tsIP.isNotEmpty();
 
-    if (! proc.getSessionErrorMessage().isEmpty())
+    if (! sessionErr.isEmpty())
     {
-        sessionStatusLabel.setText (sessionErr.isEmpty() ? "Error starting server" : sessionErr,
-                                    juce::dontSendNotification);
+        sessionStatusLabel.setText  (sessionErr, juce::dontSendNotification);
         sessionStatusLabel.setColour (juce::Label::textColourId, juce::Colours::orangered);
+    }
+    else if (hosting && connected)
+    {
+        sessionStatusLabel.setText  ("● Friend connected", juce::dontSendNotification);
+        sessionStatusLabel.setColour (juce::Label::textColourId, juce::Colours::limegreen);
+
+        tailscaleIPLabel.setText    (hasTSIP ? tsIP : "Tailscale not detected",
+                                     juce::dontSendNotification);
+        tailscaleIPLabel.setColour  (juce::Label::textColourId,
+                                     hasTSIP ? juce::Colours::white : juce::Colours::orangered);
+        copyIPButton.setEnabled (hasTSIP);
     }
     else if (hosting)
     {
-        int joined = proc.getSessionPeerCount();
-        juce::String statusText = joined == 0 ? "Waiting for peer..."
-                                : joined == 1 ? "● Peer connected"
-                                              : "● Session active";
-        juce::Colour statusCol  = joined == 0 ? juce::Colour (0xff8888aa)
-                                : joined >= 1 ? juce::Colours::limegreen
-                                              : juce::Colours::limegreen;
+        sessionStatusLabel.setText  ("● Now hosting — waiting for friend...",
+                                     juce::dontSendNotification);
+        sessionStatusLabel.setColour (juce::Label::textColourId, juce::Colours::orange);
 
-        sessionStatusLabel.setText  (statusText, juce::dontSendNotification);
-        sessionStatusLabel.setColour (juce::Label::textColourId, statusCol);
-
-        auto ip = proc.getSessionTailscaleIP();
-        tailscaleIPLabel.setText (ip.isEmpty() ? "Tailscale not detected" : ip,
-                                  juce::dontSendNotification);
-        tailscaleIPLabel.setColour (juce::Label::textColourId,
-                                    ip.isEmpty() ? juce::Colours::orangered
-                                                 : juce::Colours::white);
-        copyIPButton.setEnabled (ip.isNotEmpty());
+        tailscaleIPLabel.setText    (hasTSIP ? tsIP : "Tailscale not detected",
+                                     juce::dontSendNotification);
+        tailscaleIPLabel.setColour  (juce::Label::textColourId,
+                                     hasTSIP ? juce::Colours::white : juce::Colours::orangered);
+        copyIPButton.setEnabled (hasTSIP);
     }
     else
     {
-        auto ip = proc.getSessionTailscaleIP();
-        sessionStatusLabel.setText (ip.isEmpty() ? "Install Tailscale to host sessions"
-                                                 : "Start a session for your friend to join",
-                                    juce::dontSendNotification);
+        sessionStatusLabel.setText  (hasTSIP ? "Start a session for your friend to join"
+                                             : "Tailscale required — see README",
+                                     juce::dontSendNotification);
         sessionStatusLabel.setColour (juce::Label::textColourId,
-                                      ip.isEmpty() ? juce::Colours::orangered
-                                                   : juce::Colour (0xff8888aa));
-        startSessionButton.setEnabled (true);
+                                      hasTSIP ? juce::Colour (0xff8888aa)
+                                              : juce::Colours::orangered);
     }
+
+    // Disable Start Session when already in a session (hosting or joined)
+    startSessionButton.setEnabled (! connected && ! hosting);
 
     if (hasSession) rebuildFileTiles();
     resized();

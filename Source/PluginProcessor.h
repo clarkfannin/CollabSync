@@ -1,6 +1,6 @@
 #pragma once
 
-#define COLLABSYNC_VERSION "0.4.0"
+#define COLLABSYNC_VERSION "0.4.1"
 
 #include <JuceHeader.h>
 #include "Network/PeerConnection.h"
@@ -65,6 +65,7 @@ public:
     int  getSessionPeerCount() const;
     juce::String getSessionTailscaleIP()  const;
     juce::String getSessionErrorMessage() const;
+    juce::String getLocalTailscaleIP()    const; // works even when server is not running
 
     // PeerConnection::Listener — countdown/stop
     void onCountdownReceived (float bpm) override;
