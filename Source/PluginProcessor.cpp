@@ -60,6 +60,7 @@ void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
         daqFrameSamples = encoder->getFrameSizeSamples();
     }
 
+    jitterBuffer->prepare (sampleRate, samplesPerBlock);
     receiveBufferPrimed.store (false);
 
     // Audio send thread: drains sendBuffer, encodes, sends
@@ -174,17 +175,23 @@ void CollabSyncProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         int numSamples = buffer.getNumSamples();
         int needed     = numSamples * 2; // stereo interleaved
 
+        double nowMs = juce::Time::getMillisecondCounterHiRes();
+        jitterBuffer->onAudioCallback (nowMs);
+
+        float targetMs      = jitterBuffer->getTargetMs();
+        int   preBufferStereo = (int) (currentSampleRate * targetMs / 1000.0) * 2;
+        int   overflowStereo  = (int) (currentSampleRate * targetMs / 1000.0 * 2.5) * 2;
+
         // Pre-buffer: accumulate data before starting playback to absorb jitter.
-        bool primed = receiveBufferPrimed.load (std::memory_order_relaxed);
-        int available = receiveBuffer.getNumAvailableToRead();
+        bool primed   = receiveBufferPrimed.load (std::memory_order_relaxed);
+        int  available = receiveBuffer.getNumAvailableToRead();
 
         if (! primed)
         {
-            int preBufferSamples = (int) (currentSampleRate * 0.020) * 2; // 20ms stereo
-            if (available >= preBufferSamples + needed)
+            if (available >= preBufferStereo + needed)
             {
-                // Drain excess — keep only the pre-buffer amount to minimize latency.
-                int excess = available - preBufferSamples - needed;
+                // Drain excess — keep only the target amount to minimise latency.
+                int excess = available - preBufferStereo - needed;
                 if (excess > 0)
                 {
                     std::vector<float> discard (static_cast<size_t> (excess));
@@ -194,10 +201,10 @@ void CollabSyncProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                 receiveBufferPrimed.store (true, std::memory_order_relaxed);
             }
         }
-        else if (available > (int) (currentSampleRate * 0.050) * 2) // > 50ms buffered
+        else if (available > overflowStereo)
         {
             // Latency creeping up — skip ahead to keep it bounded
-            int target = (int) (currentSampleRate * 0.020) * 2 + needed;
+            int target = preBufferStereo + needed;
             int skip   = available - target;
             if (skip > 0)
             {
@@ -208,8 +215,9 @@ void CollabSyncProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
         else if (available < needed)
         {
-            // Buffer underrun — stop reading and re-prime.
+            // Buffer underrun — notify adaptive controller, re-prime.
             // Clean silence is far better than partial reads + zero-fill (crackling).
+            jitterBuffer->notifyDrop (nowMs);
             receiveBufferPrimed.store (false, std::memory_order_relaxed);
             bufferUnderruns.fetch_add (1, std::memory_order_relaxed);
         }
@@ -330,6 +338,7 @@ void CollabSyncProcessor::onPeerConnected()
     peerConnected.store (true);
     receiveBufferPrimed.store (false);
     receiveBuffer.reset();
+    jitterBuffer->reset();
     clock->setSessionStart (SessionClock::localNow());
     juce::MessageManager::callAsync ([this]
     {
