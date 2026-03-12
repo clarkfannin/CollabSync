@@ -1,179 +1,142 @@
 #include "PluginEditor.h"
 
-static const juce::Colour BG1    { 0xff0d0d1a };
-static const juce::Colour BG2    { 0xff161625 };
-static const juce::Colour PANEL  { 0xff1a1a2e };
-static const juce::Colour ACCENT { 0xff4a90d9 };
-static const juce::Colour DIV    { 0xff252538 };
+// Palette
+static const juce::Colour BG      { 0xff0b0b14 };
+static const juce::Colour SURFACE { 0xff13131f };
+static const juce::Colour BORDER  { 0xff222235 };
+static const juce::Colour ACCENT  { 0xff5b8dee };
+static const juce::Colour DIM     { 0xff55556e };
+static const juce::Colour SUCCESS { 0xff3dba6f };
+static const juce::Colour WARN    { 0xffe8a23a };
+static const juce::Colour ERR     { 0xffe05555 };
 
 //==============================================================================
 void CollabSyncEditor::styleSectionLabel (juce::Label& l, const juce::String& text)
 {
     l.setText (text, juce::dontSendNotification);
-    l.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-    l.setColour (juce::Label::textColourId, juce::Colour (0xff8888aa));
+    l.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+    l.setColour (juce::Label::textColourId, DIM);
 }
 
-void CollabSyncEditor::styleButton (juce::TextButton& b, juce::Colour col)
+void CollabSyncEditor::styleButton (juce::TextButton& b, juce::Colour fill, juce::Colour text)
 {
-    b.setColour (juce::TextButton::buttonColourId,  col);
-    b.setColour (juce::TextButton::textColourOnId,  juce::Colours::white);
-    b.setColour (juce::TextButton::textColourOffId, juce::Colours::white);
+    b.setColour (juce::TextButton::buttonColourId,   fill);
+    b.setColour (juce::TextButton::buttonOnColourId, fill.brighter (0.1f));
+    b.setColour (juce::TextButton::textColourOnId,   text);
+    b.setColour (juce::TextButton::textColourOffId,  text);
 }
 
 //==============================================================================
 CollabSyncEditor::CollabSyncEditor (CollabSyncProcessor& p)
     : AudioProcessorEditor (&p), proc (p)
 {
-    setSize (380, 680);
+    setSize (380, 480);
 
     // ---- Header ----
-    titleLabel.setText (juce::String ("CollabSync v") + COLLABSYNC_VERSION, juce::dontSendNotification);
-    titleLabel.setFont (juce::FontOptions (17.0f, juce::Font::bold));
-    titleLabel.setColour (juce::Label::textColourId, juce::Colours::white);
+    titleLabel.setText (juce::String ("CollabSync  ") + COLLABSYNC_VERSION,
+                        juce::dontSendNotification);
+    titleLabel.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+    titleLabel.setColour (juce::Label::textColourId, juce::Colour (0xffeeeef8));
     addAndMakeVisible (titleLabel);
 
     statusLabel.setFont (juce::FontOptions (11.0f));
     statusLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (statusLabel);
 
-    latencyLabel.setFont (juce::FontOptions (10.0f));
-    latencyLabel.setColour (juce::Label::textColourId, juce::Colour (0xff666688));
+    latencyLabel.setFont (juce::FontOptions (9.5f));
+    latencyLabel.setColour (juce::Label::textColourId, DIM);
     latencyLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (latencyLabel);
 
-    // ---- Room row ----
-    roomLabel.setText ("Room", juce::dontSendNotification);
-    roomLabel.setFont (juce::FontOptions (11.0f));
-    roomLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8888aa));
-    addAndMakeVisible (roomLabel);
-
-    roomInput.setTextToShowWhenEmpty ("room code", juce::Colours::darkgrey);
-    roomInput.setInputRestrictions (8, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
-    roomInput.setColour (juce::TextEditor::backgroundColourId,     juce::Colour (0xff1e1e35));
-    roomInput.setColour (juce::TextEditor::textColourId,           juce::Colours::white);
-    roomInput.setColour (juce::TextEditor::outlineColourId,        DIV);
-    roomInput.setColour (juce::TextEditor::focusedOutlineColourId, ACCENT);
-    roomInput.setFont (juce::FontOptions (13.0f));
-    addAndMakeVisible (roomInput);
-
-    hostLabel.setText ("Host", juce::dontSendNotification);
-    hostLabel.setFont (juce::FontOptions (11.0f));
-    hostLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8888aa));
-    addAndMakeVisible (hostLabel);
-
-    hostInput.setTextToShowWhenEmpty ("Tailscale IP", juce::Colours::darkgrey);
-    hostInput.setColour (juce::TextEditor::backgroundColourId,     juce::Colour (0xff1e1e35));
-    hostInput.setColour (juce::TextEditor::textColourId,           juce::Colours::white);
-    hostInput.setColour (juce::TextEditor::outlineColourId,        DIV);
-    hostInput.setColour (juce::TextEditor::focusedOutlineColourId, ACCENT);
-    hostInput.setFont (juce::FontOptions (12.0f));
-    hostInput.setText (proc.signalingHost, juce::dontSendNotification);
-    addAndMakeVisible (hostInput);
-
-    // ---- Buttons ----
-    styleButton (connectButton,      ACCENT);
-    styleButton (disconnectButton,   juce::Colour (0xff383848));
-    styleButton (recordButton,       juce::Colour (0xffbb2222));
-    styleButton (showInFinderButton, juce::Colour (0xff2a3a4a));
-
-    addAndMakeVisible (connectButton);
-    addAndMakeVisible (disconnectButton);
-    addAndMakeVisible (recordButton);
-    addChildComponent (showInFinderButton);
-
-    connectButton.onClick    = [this] {
-        auto host = hostInput.getText().trim();
-        proc.connect ("SYNC", host); // room code is fixed; users only need the host IP
-    };
-    disconnectButton.onClick = [this] { proc.disconnect(); };
-    recordButton.onClick     = [this] {
-        if (proc.isRecording())
-            proc.triggerStop();
-        else if (! proc.isCountingDown())
-            proc.triggerRecord();
-    };
-    showInFinderButton.onClick = [this] {
-        if (proc.lastSessionDir.isDirectory())
-            proc.lastSessionDir.revealToUser();
-    };
-
-    // ---- Session hosting ----
-    styleSectionLabel (sessionSectionLabel, "HOST A SESSION");
+    // ---- Host a session ----
+    styleSectionLabel (sessionSectionLabel, "HOST");
     addAndMakeVisible (sessionSectionLabel);
 
-    styleButton (startSessionButton, juce::Colour (0xff2a6a3a));
-    styleButton (stopSessionButton,  juce::Colour (0xff383848));
-    styleButton (copyIPButton,       juce::Colour (0xff2a3a4a));
+    sessionStatusLabel.setFont (juce::FontOptions (11.5f));
+    sessionStatusLabel.setColour (juce::Label::textColourId, DIM);
+    sessionStatusLabel.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (sessionStatusLabel);
+
+    tailscaleIPLabel.setFont (juce::FontOptions (13.0f));
+    tailscaleIPLabel.setColour (juce::Label::textColourId, juce::Colour (0xffdde0f0));
+    tailscaleIPLabel.setJustificationType (juce::Justification::centredLeft);
+
+    styleButton (startSessionButton, ACCENT);
+    styleButton (stopSessionButton,  juce::Colour (0xff1e1e30));
+    styleButton (copyIPButton,       juce::Colour (0xff1a2a40));
+
     addAndMakeVisible (startSessionButton);
     addChildComponent (stopSessionButton);
     addChildComponent (tailscaleIPLabel);
     addChildComponent (copyIPButton);
 
-    sessionStatusLabel.setFont (juce::FontOptions (11.0f));
-    sessionStatusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8888aa));
-    sessionStatusLabel.setJustificationType (juce::Justification::centredLeft);
-    addAndMakeVisible (sessionStatusLabel);
-
-    tailscaleIPLabel.setFont (juce::FontOptions (12.0f));
-    tailscaleIPLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
-    tailscaleIPLabel.setJustificationType (juce::Justification::centredLeft);
-
     startSessionButton.onClick = [this] { proc.startSessionServer(); updateUI(); };
     stopSessionButton.onClick  = [this] { proc.stopSessionServer();  updateUI(); };
     copyIPButton.onClick       = [this] {
-        auto ip = proc.getSessionTailscaleIP();
-        if (ip.isNotEmpty())
-            juce::SystemClipboard::copyTextToClipboard (ip);
+        auto ip = proc.getLocalTailscaleIP();
+        if (ip.isNotEmpty()) juce::SystemClipboard::copyTextToClipboard (ip);
     };
 
-    // ---- Device section labels ----
-    styleSectionLabel (midiSectionLabel,         "MIDI DEVICES");
-    styleSectionLabel (audioInputSectionLabel,    "AUDIO INPUT");
-    styleSectionLabel (audioOutputSectionLabel,   "AUDIO OUTPUT");
-    addAndMakeVisible (midiSectionLabel);
-    addAndMakeVisible (audioInputSectionLabel);
-    addAndMakeVisible (audioOutputSectionLabel);
+    // ---- Join a session ----
+    hostLabel.setText ("HOST IP", juce::dontSendNotification);
+    hostLabel.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+    hostLabel.setColour (juce::Label::textColourId, DIM);
+    addAndMakeVisible (hostLabel);
 
-    midiEmptyLabel.setText ("No MIDI devices detected", juce::dontSendNotification);
-    midiEmptyLabel.setFont (juce::FontOptions (11.0f));
-    midiEmptyLabel.setColour (juce::Label::textColourId, juce::Colour (0xff555568));
-    midiEmptyLabel.setJustificationType (juce::Justification::centredLeft);
+    hostInput.setTextToShowWhenEmpty ("Tailscale IP of host", juce::Colour (0xff44445a));
+    hostInput.setColour (juce::TextEditor::backgroundColourId,     juce::Colour (0xff111120));
+    hostInput.setColour (juce::TextEditor::textColourId,           juce::Colour (0xffdde0f0));
+    hostInput.setColour (juce::TextEditor::outlineColourId,        BORDER);
+    hostInput.setColour (juce::TextEditor::focusedOutlineColourId, ACCENT);
+    hostInput.setFont (juce::FontOptions (12.5f));
+    hostInput.setText (proc.signalingHost, juce::dontSendNotification);
+    addAndMakeVisible (hostInput);
 
-    audioInputEmptyLabel.setText ("No audio inputs detected", juce::dontSendNotification);
-    audioInputEmptyLabel.setFont (juce::FontOptions (11.0f));
-    audioInputEmptyLabel.setColour (juce::Label::textColourId, juce::Colour (0xff555568));
-    audioInputEmptyLabel.setJustificationType (juce::Justification::centredLeft);
+    styleButton (connectButton,    ACCENT);
+    styleButton (disconnectButton, juce::Colour (0xff1e1e30));
 
-    audioOutputEmptyLabel.setText ("No audio outputs detected", juce::dontSendNotification);
-    audioOutputEmptyLabel.setFont (juce::FontOptions (11.0f));
-    audioOutputEmptyLabel.setColour (juce::Label::textColourId, juce::Colour (0xff555568));
-    audioOutputEmptyLabel.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (connectButton);
+    addAndMakeVisible (disconnectButton);
+
+    connectButton.onClick    = [this] {
+        proc.connect ("SYNC", hostInput.getText().trim());
+    };
+    disconnectButton.onClick = [this] { proc.disconnect(); };
+
+    // ---- Record ----
+    styleButton (recordButton, juce::Colour (0xff8b1a1a));
+    addAndMakeVisible (recordButton);
+    recordButton.onClick = [this] {
+        if (proc.isRecording())        proc.triggerStop();
+        else if (! proc.isCountingDown()) proc.triggerRecord();
+    };
 
     // ---- Diagnostics ----
-    diagLabel.setFont (juce::FontOptions (9.5f));
-    diagLabel.setColour (juce::Label::textColourId, juce::Colour (0xff666688));
+    diagLabel.setFont (juce::FontOptions (9.0f));
+    diagLabel.setColour (juce::Label::textColourId, juce::Colour (0xff383850));
     diagLabel.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (diagLabel);
 
     // ---- Countdown overlay ----
-    countdownLabel.setFont (juce::FontOptions (90.0f, juce::Font::bold));
+    countdownLabel.setFont (juce::FontOptions (96.0f, juce::Font::bold));
     countdownLabel.setJustificationType (juce::Justification::centred);
     countdownLabel.setColour (juce::Label::textColourId, juce::Colours::white);
     countdownLabel.setInterceptsMouseClicks (false, false);
     addChildComponent (countdownLabel);
 
-    // ---- Files ----
-    filesHeaderLabel.setText ("Last Session - drag to playlist",
-                              juce::dontSendNotification);
-    filesHeaderLabel.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-    filesHeaderLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8888aa));
+    // ---- Session files ----
+    styleSectionLabel (filesHeaderLabel, "LAST SESSION  -  drag to playlist");
     addChildComponent (filesHeaderLabel);
+
+    styleButton (showInFinderButton, juce::Colour (0xff161622));
+    showInFinderButton.setColour (juce::TextButton::textColourOffId, DIM);
     addChildComponent (showInFinderButton);
+    showInFinderButton.onClick = [this] {
+        if (proc.lastSessionDir.isDirectory()) proc.lastSessionDir.revealToUser();
+    };
 
     proc.stateListeners.add (this);
     startTimerHz (8);
-    refreshDevices();
     updateUI();
 }
 
@@ -186,92 +149,46 @@ CollabSyncEditor::~CollabSyncEditor()
 //==============================================================================
 void CollabSyncEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (BG1);
+    g.fillAll (BG);
 
     // Header bar
-    g.setColour (BG2);
-    g.fillRect (0, 0, getWidth(), 48);
+    g.setColour (SURFACE);
+    g.fillRect (0, 0, getWidth(), 52);
 
-    // Draw subtle panel background behind each device section
-    auto paintSection = [&] (int y, int h) {
-        g.setColour (PANEL);
-        g.fillRect (12, y, getWidth() - 24, h);
-        g.setColour (DIV);
-        g.drawRect (12, y, getWidth() - 24, h, 1);
-    };
+    // Bottom edge of header
+    g.setColour (BORDER);
+    g.drawHorizontalLine (52, 0.0f, (float) getWidth());
 
-    // We'll rely on resized() positions — just draw full-width dividers
-    g.setColour (DIV);
-    for (int lineY : { 48, 104, 148 })
-        g.drawHorizontalLine (lineY, 0.0f, (float) getWidth());
-
-    // Countdown overlay
+    // Countdown dim overlay
     if (proc.isCountingDown())
     {
-        g.setColour (juce::Colours::black.withAlpha (0.82f));
+        g.setColour (juce::Colours::black.withAlpha (0.85f));
         g.fillAll();
     }
-
-    juce::ignoreUnused (paintSection);
 }
 
 //==============================================================================
-int CollabSyncEditor::layoutDeviceSection (juce::OwnedArray<DeviceRow>& rows,
-                                            juce::Label& emptyLabel, int y)
-{
-    int rowH = 24;
-    if (rows.isEmpty())
-    {
-        emptyLabel.setBounds (20, y, getWidth() - 40, rowH);
-        addAndMakeVisible (emptyLabel);
-        y += rowH + 4;
-    }
-    else
-    {
-        emptyLabel.setVisible (false);
-        for (auto* row : rows)
-        {
-            row->setBounds (12, y, getWidth() - 24, rowH);
-            addAndMakeVisible (*row);
-            y += rowH + 2;
-        }
-    }
-    return y;
-}
-
 void CollabSyncEditor::resized()
 {
-    int x = 12;
-    int w = getWidth() - 24;
+    const int pad  = 16;
+    const int w    = getWidth() - pad * 2;
+    int       y    = 0;
 
     // Header
-    titleLabel.setBounds  (x, 12, 130, 24);
-    statusLabel.setBounds (x + 130, 8,  w - 130, 22);
-    latencyLabel.setBounds(x + 130, 28, w - 130, 16);
+    titleLabel.setBounds   (pad, 14, 180, 24);
+    statusLabel.setBounds  (pad + 180, 10, w - 180, 20);
+    latencyLabel.setBounds (pad + 180, 30, w - 180, 14);
+    y = 64;
 
-    int y = 56;
+    bool hosting   = proc.isHostingSession();
+    bool connected = proc.isConnected();
 
-    // Host row
-    hostLabel.setBounds (x, y, 38, 28);
-    hostInput.setBounds (x + 42, y, w - 42, 28);
-    y += 34;
-
-    // Connect / disconnect row (room code is hidden — fixed to "SYNC" internally)
-    roomLabel.setVisible (false);
-    roomInput.setVisible (false);
-    disconnectButton.setBounds (x + w - 84,  y, 84, 28);
-    connectButton.setBounds    (x + w - 172, y, 84, 28);
-    y += 34;
-
-    // Record button
-    recordButton.setBounds (x, y, w, 34);
-    y += 38;
-
-    // Session hosting
-    sessionSectionLabel.setBounds (x, y, w, 16);
+    // HOST section
+    sessionSectionLabel.setBounds (pad, y, w, 14);
     y += 20;
 
-    bool hosting = proc.isHostingSession();
+    sessionStatusLabel.setBounds (pad, y, w, 18);
+    y += 24;
 
     startSessionButton.setVisible (! hosting);
     stopSessionButton.setVisible  (hosting);
@@ -280,45 +197,42 @@ void CollabSyncEditor::resized()
 
     if (hosting)
     {
-        sessionStatusLabel.setBounds (x, y, w, 18);
-        y += 22;
-
-        int ipW = w - 72;
-        tailscaleIPLabel.setBounds (x,        y, ipW, 26);
-        copyIPButton.setBounds     (x + ipW + 4, y, 68, 26);
-        y += 30;
-        stopSessionButton.setBounds (x, y, w, 28);
-        y += 32;
+        int ipW = w - 76;
+        tailscaleIPLabel.setBounds (pad,           y, ipW, 28);
+        copyIPButton.setBounds     (pad + ipW + 6, y, 70,  28);
+        y += 34;
+        stopSessionButton.setBounds (pad, y, w, 30);
+        y += 36;
     }
     else
     {
-        sessionStatusLabel.setBounds (x, y, w, 18);
-        y += 22;
-        startSessionButton.setBounds (x, y, w, 28);
-        y += 32;
+        startSessionButton.setBounds (pad, y, w, 30);
+        y += 36;
     }
 
+    // Divider
+    y += 4;
+
+    // JOIN section — label acts as a visual separator
+    hostLabel.setBounds (pad, y, w, 14);
+    y += 20;
+
+    hostInput.setBounds (pad, y, w, 32);
+    y += 38;
+
+    int btnW = (w - 8) / 2;
+    connectButton.setBounds    (pad,           y, btnW, 30);
+    disconnectButton.setBounds (pad + btnW + 8, y, btnW, 30);
+    y += 38;
+
+    // Record
+    y += 4;
+    recordButton.setBounds (pad, y, w, 38);
+    y += 46;
+
     // Diagnostics
-    diagLabel.setBounds (x, y, w, 14);
-    y += 18;
-
-    // MIDI devices
-    midiSectionLabel.setBounds (x, y, w, 16);
+    diagLabel.setBounds (pad, y, w, 13);
     y += 20;
-    y = layoutDeviceSection (midiRows, midiEmptyLabel, y);
-    y += 6;
-
-    // Audio input devices
-    audioInputSectionLabel.setBounds (x, y, w, 16);
-    y += 20;
-    y = layoutDeviceSection (audioInputRows, audioInputEmptyLabel, y);
-    y += 6;
-
-    // Audio output devices
-    audioOutputSectionLabel.setBounds (x, y, w, 16);
-    y += 20;
-    y = layoutDeviceSection (audioOutputRows, audioOutputEmptyLabel, y);
-    y += 6;
 
     // Session files
     bool hasSession = proc.lastSessionDir.isDirectory();
@@ -327,23 +241,23 @@ void CollabSyncEditor::resized()
 
     if (hasSession)
     {
-        filesHeaderLabel.setBounds (x, y, w, 16);
+        filesHeaderLabel.setBounds (pad, y, w, 14);
         y += 20;
 
-        int tileW = (w - 4) / 2;
+        int tileW = (w - 8) / 2;
         for (int i = 0; i < 4; ++i)
         {
             if (fileTiles[i])
             {
-                fileTiles[i]->setBounds (x + (i % 2) * (tileW + 4),
-                                         y + (i / 2) * 32,
+                fileTiles[i]->setBounds (pad + (i % 2) * (tileW + 8),
+                                         y   + (i / 2) * 34,
                                          tileW, 28);
                 fileTiles[i]->setVisible (true);
             }
         }
-        y += 68;
-        showInFinderButton.setBounds (x, y, w, 26);
-        y += 30;
+        y += 74;
+        showInFinderButton.setBounds (pad, y, w, 26);
+        y += 32;
     }
     else
     {
@@ -351,8 +265,15 @@ void CollabSyncEditor::resized()
             if (t) t->setVisible (false);
     }
 
-    // Countdown full-cover
+    // Resize window to fit content
+    int needed = y + 8;
+    if (needed != getHeight())
+        setSize (getWidth(), needed);
+
+    // Countdown covers everything
     countdownLabel.setBounds (getLocalBounds());
+
+    juce::ignoreUnused (connected);
 }
 
 //==============================================================================
@@ -368,20 +289,18 @@ void CollabSyncEditor::timerCallback()
         latencyLabel.setText (juce::String (proc.getLatencyMs(), 1) + " ms",
                               juce::dontSendNotification);
 
-        // Diagnostics
         int bufLevel = proc.recvBufferLevel.load (std::memory_order_relaxed);
         int bufMs    = (int) (bufLevel / 2.0 / proc.getSampleRate() * 1000.0);
-        juce::String diag = "pkt:" + juce::String (proc.packetsReceived.load())
-            + "  dec:" + juce::String (proc.decodeSuccesses.load())
-            + "/" + juce::String (proc.decodeFailures.load())
-            + "  buf:" + juce::String (bufMs) + "ms"
-            + "  underruns:" + juce::String (proc.bufferUnderruns.load());
-        diagLabel.setText (diag, juce::dontSendNotification);
+        diagLabel.setText (
+            "buf " + juce::String (bufMs) + "ms  "
+            + "pkt " + juce::String (proc.packetsReceived.load()) + "  "
+            + "underruns " + juce::String (proc.bufferUnderruns.load()),
+            juce::dontSendNotification);
     }
     else
     {
         latencyLabel.setText ({}, juce::dontSendNotification);
-        diagLabel.setText ({}, juce::dontSendNotification);
+        diagLabel.setText    ({}, juce::dontSendNotification);
     }
 
     bool counting = proc.isCountingDown();
@@ -393,11 +312,7 @@ void CollabSyncEditor::timerCallback()
         repaint();
     }
 
-    // Refresh UI every tick so hosting status and connection state stay current
     updateUI();
-
-    static int devTick = 0;
-    if (++devTick >= 32) { devTick = 0; refreshDevices(); }
 }
 
 //==============================================================================
@@ -406,63 +321,57 @@ void CollabSyncEditor::updateUI()
     bool connected    = proc.isConnected();
     bool recording    = proc.isRecording();
     bool countingDown = proc.isCountingDown();
-    bool hasSession   = proc.lastSessionDir.isDirectory();
     bool hosting      = proc.isHostingSession();
+    bool hasSession   = proc.lastSessionDir.isDirectory();
 
+    // Main status (header)
     juce::String statusText;
-    juce::Colour statusCol = juce::Colour (0xff666688);
+    juce::Colour statusCol = DIM;
 
-    if      (connected && recording)   { statusText = "Recording";    statusCol = juce::Colours::red; }
-    else if (connected && countingDown){ statusText = "Get ready...";   statusCol = juce::Colours::orange; }
-    else if (connected)                { statusText = "Connected";    statusCol = juce::Colours::limegreen; }
-    else if (proc.currentStatus.startsWith ("ERROR")) { statusText = proc.currentStatus; statusCol = juce::Colours::orangered; }
-    else if (proc.currentStatus.startsWith ("Wait"))  { statusText = proc.currentStatus; statusCol = juce::Colours::orange; }
+    if      (connected && recording)    { statusText = "Recording";    statusCol = ERR;     }
+    else if (connected && countingDown) { statusText = "Get ready..."; statusCol = WARN;    }
+    else if (connected)                 { statusText = "Connected";    statusCol = SUCCESS;  }
+    else if (proc.currentStatus.startsWith ("ERROR")) { statusText = proc.currentStatus; statusCol = ERR;  }
+    else if (proc.currentStatus.startsWith ("Wait"))  { statusText = proc.currentStatus; statusCol = WARN; }
     else if (proc.currentStatus.isNotEmpty())         { statusText = proc.currentStatus; }
-    else                                               { statusText = "Not connected"; }
+    else                                               { statusText = "Not connected";   }
 
-    statusLabel.setText  (statusText, juce::dontSendNotification);
+    statusLabel.setText   (statusText, juce::dontSendNotification);
     statusLabel.setColour (juce::Label::textColourId, statusCol);
 
+    // Buttons
     connectButton.setEnabled    (! connected && ! countingDown && ! hosting);
     disconnectButton.setEnabled (connected && ! recording && ! countingDown);
     recordButton.setEnabled     (connected && ! countingDown);
+    startSessionButton.setEnabled (! connected && ! hosting);
 
     recordButton.setButtonText (recording ? "Stop" : "Record");
-    styleButton (recordButton, recording ? juce::Colour (0xff881111) : juce::Colour (0xffbb2222));
+    styleButton (recordButton, recording ? juce::Colour (0xff6a1010) : juce::Colour (0xff8b1a1a));
 
     // Session hosting status
-    // Use isConnected() (P2P UDP link) not joinedCount (TCP signaling) —
-    // peers disconnect from signaling as soon as they've exchanged IPs.
     auto    sessionErr = proc.getSessionErrorMessage();
-    auto    tsIP       = proc.getLocalTailscaleIP(); // works regardless of server state
+    auto    tsIP       = proc.getLocalTailscaleIP();
     bool    hasTSIP    = tsIP.isNotEmpty();
 
     if (! sessionErr.isEmpty())
     {
         sessionStatusLabel.setText  (sessionErr, juce::dontSendNotification);
-        sessionStatusLabel.setColour (juce::Label::textColourId, juce::Colours::orangered);
+        sessionStatusLabel.setColour (juce::Label::textColourId, ERR);
     }
     else if (hosting && connected)
     {
         sessionStatusLabel.setText  ("Friend connected", juce::dontSendNotification);
-        sessionStatusLabel.setColour (juce::Label::textColourId, juce::Colours::limegreen);
-
-        tailscaleIPLabel.setText    (hasTSIP ? tsIP : "Tailscale not detected",
-                                     juce::dontSendNotification);
-        tailscaleIPLabel.setColour  (juce::Label::textColourId,
-                                     hasTSIP ? juce::Colours::white : juce::Colours::orangered);
+        sessionStatusLabel.setColour (juce::Label::textColourId, SUCCESS);
+        tailscaleIPLabel.setText    (hasTSIP ? tsIP : "No Tailscale IP", juce::dontSendNotification);
+        tailscaleIPLabel.setColour  (juce::Label::textColourId, hasTSIP ? juce::Colour (0xffdde0f0) : ERR);
         copyIPButton.setEnabled (hasTSIP);
     }
     else if (hosting)
     {
-        sessionStatusLabel.setText  ("Now hosting - waiting for friend...",
-                                     juce::dontSendNotification);
-        sessionStatusLabel.setColour (juce::Label::textColourId, juce::Colours::orange);
-
-        tailscaleIPLabel.setText    (hasTSIP ? tsIP : "Tailscale not detected",
-                                     juce::dontSendNotification);
-        tailscaleIPLabel.setColour  (juce::Label::textColourId,
-                                     hasTSIP ? juce::Colours::white : juce::Colours::orangered);
+        sessionStatusLabel.setText  ("Hosting - waiting for friend", juce::dontSendNotification);
+        sessionStatusLabel.setColour (juce::Label::textColourId, WARN);
+        tailscaleIPLabel.setText    (hasTSIP ? tsIP : "No Tailscale IP", juce::dontSendNotification);
+        tailscaleIPLabel.setColour  (juce::Label::textColourId, hasTSIP ? juce::Colour (0xffdde0f0) : ERR);
         copyIPButton.setEnabled (hasTSIP);
     }
     else
@@ -470,13 +379,8 @@ void CollabSyncEditor::updateUI()
         sessionStatusLabel.setText  (hasTSIP ? "Start a session for your friend to join"
                                              : "Tailscale required - see README",
                                      juce::dontSendNotification);
-        sessionStatusLabel.setColour (juce::Label::textColourId,
-                                      hasTSIP ? juce::Colour (0xff8888aa)
-                                              : juce::Colours::orangered);
+        sessionStatusLabel.setColour (juce::Label::textColourId, hasTSIP ? DIM : ERR);
     }
-
-    // Disable Start Session when already in a session (hosting or joined)
-    startSessionButton.setEnabled (! connected && ! hosting);
 
     if (hasSession) rebuildFileTiles();
     resized();
@@ -484,112 +388,16 @@ void CollabSyncEditor::updateUI()
 }
 
 //==============================================================================
-void CollabSyncEditor::refreshDevices()
-{
-    // --- MIDI ---
-    auto midiDevices = juce::MidiInput::getAvailableDevices();
-    bool midiChanged = (midiDevices.size() != midiRows.size());
-    if (! midiChanged)
-        for (int i = 0; i < midiDevices.size(); ++i)
-            if (midiDevices[i].name != midiRows[i]->deviceName) { midiChanged = true; break; }
-
-    if (midiChanged)
-    {
-        midiRows.clear();
-        for (auto& d : midiDevices)
-            midiRows.add (new DeviceRow (d.name, DeviceRow::Status::available));
-    }
-
-    // --- Audio (separate input/output) ---
-    std::unique_ptr<juce::AudioIODeviceType> coreAudio (
-        juce::AudioIODeviceType::createAudioIODeviceType_CoreAudio());
-
-    juce::StringArray inputNames, outputNames;
-    if (coreAudio)
-    {
-        coreAudio->scanForDevices();
-        inputNames  = coreAudio->getDeviceNames (true);   // input devices
-        outputNames = coreAudio->getDeviceNames (false);   // output devices
-    }
-
-    // Determine which device is active (if running standalone with a device manager).
-    // In plugin mode the DAW manages devices, so all show as "available".
-    juce::String activeInputName, activeOutputName;
-    bool isStandalone = (proc.wrapperType == juce::AudioProcessor::WrapperType::wrapperType_Standalone);
-
-    // Note: In plugin mode (VST3/AU), the DAW manages devices.
-    // Active device detection is only possible in standalone mode, which
-    // would require StandalonePluginHolder access. For now, all detected
-    // devices show as "available" (blue). The active device in your DAW
-    // is whatever you've selected in the DAW's audio/MIDI settings.
-    juce::ignoreUnused (isStandalone, activeInputName, activeOutputName);
-
-    // Rebuild audio input rows
-    bool inputChanged = (inputNames.size() != audioInputRows.size());
-    if (! inputChanged)
-        for (int i = 0; i < inputNames.size(); ++i)
-            if (inputNames[i] != audioInputRows[i]->deviceName) { inputChanged = true; break; }
-
-    if (inputChanged)
-    {
-        audioInputRows.clear();
-        for (auto& name : inputNames)
-        {
-            auto status = (name == activeInputName) ? DeviceRow::Status::active
-                                                    : DeviceRow::Status::available;
-            audioInputRows.add (new DeviceRow (name, status));
-        }
-    }
-    else if (! activeInputName.isEmpty())
-    {
-        // Update active status on existing rows
-        for (auto* row : audioInputRows)
-            row->status = (row->deviceName == activeInputName) ? DeviceRow::Status::active
-                                                               : DeviceRow::Status::available;
-    }
-
-    // Rebuild audio output rows
-    bool outputChanged = (outputNames.size() != audioOutputRows.size());
-    if (! outputChanged)
-        for (int i = 0; i < outputNames.size(); ++i)
-            if (outputNames[i] != audioOutputRows[i]->deviceName) { outputChanged = true; break; }
-
-    if (outputChanged)
-    {
-        audioOutputRows.clear();
-        for (auto& name : outputNames)
-        {
-            auto status = (name == activeOutputName) ? DeviceRow::Status::active
-                                                     : DeviceRow::Status::available;
-            audioOutputRows.add (new DeviceRow (name, status));
-        }
-    }
-    else if (! activeOutputName.isEmpty())
-    {
-        for (auto* row : audioOutputRows)
-            row->status = (row->deviceName == activeOutputName) ? DeviceRow::Status::active
-                                                                : DeviceRow::Status::available;
-    }
-
-    if (midiChanged || inputChanged || outputChanged)
-    {
-        resized();
-        repaint();
-    }
-}
-
-//==============================================================================
 void CollabSyncEditor::rebuildFileTiles()
 {
-    static const char* names[]  = { "local.wav",  "remote.wav",  "local.mid",  "remote.mid" };
-    static const char* labels[] = { "local.wav",  "remote.wav",  "local.mid",  "remote.mid" };
+    static const char* names[]  = { "local.wav", "remote.wav", "local.mid", "remote.mid" };
 
     for (int i = 0; i < 4; ++i)
     {
         auto file = proc.lastSessionDir.getChildFile (names[i]);
         if (file.existsAsFile() && (! fileTiles[i] || fileTiles[i]->getName() != names[i]))
         {
-            fileTiles[i] = std::make_unique<FileTile> (file, labels[i]);
+            fileTiles[i] = std::make_unique<FileTile> (file, names[i]);
             fileTiles[i]->setName (names[i]);
             addAndMakeVisible (*fileTiles[i]);
         }

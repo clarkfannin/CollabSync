@@ -374,6 +374,7 @@ void CollabSyncProcessor::onStatusChanged (const juce::String& status)
 //==============================================================================
 void CollabSyncProcessor::connect (const juce::String& roomCode, const juce::String& host)
 {
+    disconnect(); // always tear down cleanly before creating a new connection
     if (host.isNotEmpty()) signalingHost = host;
     peer = std::make_unique<PeerConnection> (this);
     peer->connect (signalingHost + ":8765", roomCode);
@@ -488,7 +489,8 @@ void CollabSyncProcessor::startSessionServer()
 
 void CollabSyncProcessor::stopSessionServer()
 {
-    signalingServer->stop();
+    signalingServer->stop(); // stop first so onPeerDisconnected doesn't auto-rejoin
+    disconnect();
 }
 
 bool CollabSyncProcessor::isHostingSession() const

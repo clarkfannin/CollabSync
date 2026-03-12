@@ -3,37 +3,6 @@
 #include "PluginProcessor.h"
 
 //==============================================================================
-// A single device row: coloured dot + name
-class DeviceRow : public juce::Component
-{
-public:
-    enum class Status { active, available, unavailable, error };
-
-    DeviceRow (const juce::String& name, Status s) : deviceName (name), status (s) {}
-
-    void paint (juce::Graphics& g) override
-    {
-        // Dot: active=green, available=blue, unavailable=grey, error=red
-        juce::Colour dotCol = status == Status::active      ? juce::Colours::limegreen :
-                              status == Status::available    ? juce::Colour (0xff4a90d9) :
-                              status == Status::error        ? juce::Colours::red :
-                                                               juce::Colour (0xff444455);
-        g.setColour (dotCol);
-        g.fillEllipse ((float)(getWidth() - 14), (float)(getHeight() / 2 - 4), 8.0f, 8.0f);
-
-        // Name — dim text for unavailable devices
-        g.setColour (status == Status::unavailable ? juce::Colour (0xff555568)
-                                                   : juce::Colours::lightgrey);
-        g.setFont (juce::FontOptions (11.0f));
-        g.drawText (deviceName, 8, 0, getWidth() - 26, getHeight(),
-                    juce::Justification::centredLeft, true);
-    }
-
-    juce::String deviceName;
-    Status       status;
-};
-
-//==============================================================================
 // Draggable file tile for session export
 class FileTile : public juce::Component
 {
@@ -43,16 +12,21 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.setColour (isMouseOver() ? juce::Colour (0xff2a4a7a) : juce::Colour (0xff1e3050));
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), 5.0f);
-        g.setColour (juce::Colours::white);
+        auto b = getLocalBounds().toFloat();
+        g.setColour (isMouseOver() ? juce::Colour (0xff1e2e48) : juce::Colour (0xff161e30));
+        g.fillRoundedRectangle (b, 4.0f);
+        g.setColour (juce::Colour (0xff2a3a56));
+        g.drawRoundedRectangle (b.reduced (0.5f), 4.0f, 1.0f);
+
+        g.setColour (juce::Colour (0xffb0b8cc));
         g.setFont (juce::FontOptions (11.0f));
-        g.drawText (labelText, 8, 0, getWidth() - 36, getHeight(),
+        g.drawText (labelText, 10, 0, getWidth() - 24, getHeight(),
                     juce::Justification::centredLeft, true);
-        g.setColour (juce::Colours::lightblue.withAlpha (0.6f));
+
+        g.setColour (juce::Colour (0xff4a6a9a));
         g.setFont (juce::FontOptions (10.0f));
-        g.drawText (u8"\u2197", getWidth() - 20, 0, 16, getHeight(),
-                    juce::Justification::centred, false);
+        g.drawText ("drag", getWidth() - 32, 0, 28, getHeight(),
+                    juce::Justification::centredRight, false);
     }
 
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
@@ -90,32 +64,27 @@ private:
     juce::Label titleLabel, statusLabel, latencyLabel;
 
     // Connection
-    juce::Label         roomLabel, hostLabel;
-    juce::TextEditor    roomInput, hostInput;
-    juce::TextButton    connectButton    { "Connect" };
-    juce::TextButton    disconnectButton { "Disconnect" };
+    juce::Label      hostLabel;
+    juce::TextEditor hostInput;
+    juce::TextButton connectButton    { "Connect"    };
+    juce::TextButton disconnectButton { "Disconnect" };
 
-    // Countdown
-    juce::Label countdownLabel;
+    // Session hosting
+    juce::Label      sessionSectionLabel;
+    juce::TextButton startSessionButton { "Start Session" };
+    juce::TextButton stopSessionButton  { "Stop Session"  };
+    juce::Label      sessionStatusLabel;
+    juce::Label      tailscaleIPLabel;
+    juce::TextButton copyIPButton       { "Copy IP" };
 
     // Record
     juce::TextButton recordButton { "Record" };
 
-    // Device sections
-    juce::Label midiSectionLabel, audioInputSectionLabel, audioOutputSectionLabel;
-    juce::OwnedArray<DeviceRow> midiRows, audioInputRows, audioOutputRows;
-    juce::Label midiEmptyLabel, audioInputEmptyLabel, audioOutputEmptyLabel;
-
-    // Session hosting
-    juce::Label      sessionSectionLabel;
-    juce::TextButton startSessionButton  { "Start Session" };
-    juce::TextButton stopSessionButton   { "Stop Session"  };
-    juce::Label      sessionStatusLabel;
-    juce::Label      tailscaleIPLabel;
-    juce::TextButton copyIPButton        { "Copy IP" };
-
     // Diagnostics
     juce::Label diagLabel;
+
+    // Countdown
+    juce::Label countdownLabel;
 
     // Session files
     juce::Label      filesHeaderLabel;
@@ -123,13 +92,10 @@ private:
     std::array<std::unique_ptr<FileTile>, 4> fileTiles;
 
     void updateUI();
-    void refreshDevices();
     void rebuildFileTiles();
-    int  layoutDeviceSection (juce::OwnedArray<DeviceRow>& rows,
-                              juce::Label& emptyLabel, int y);
 
+    static void styleButton       (juce::TextButton& b, juce::Colour fill, juce::Colour text = juce::Colours::white);
     static void styleSectionLabel (juce::Label& l, const juce::String& text);
-    static void styleButton (juce::TextButton& b, juce::Colour col);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CollabSyncEditor)
 };

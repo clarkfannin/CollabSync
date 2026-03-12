@@ -1,6 +1,6 @@
 #pragma once
 
-#define COLLABSYNC_VERSION "0.4.2"
+#define COLLABSYNC_VERSION "0.4.3"
 
 #include <JuceHeader.h>
 #include "Network/PeerConnection.h"

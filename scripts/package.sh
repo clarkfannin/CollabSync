@@ -5,7 +5,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$PROJECT_DIR/build"
 DIST_DIR="$PROJECT_DIR/dist"
 SCRIPTS_DIR="$PROJECT_DIR/scripts"
-VERSION="0.4.2"
+VERSION="0.4.3"
 PKG_NAME="CollabSync-$VERSION.pkg"
 
 echo "==> Gathering plugin bundles..."
