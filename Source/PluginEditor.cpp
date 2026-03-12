@@ -164,7 +164,7 @@ CollabSyncEditor::CollabSyncEditor (CollabSyncProcessor& p)
     addChildComponent (countdownLabel);
 
     // ---- Files ----
-    filesHeaderLabel.setText ("Last Session — drag to playlist",
+    filesHeaderLabel.setText ("Last Session - drag to playlist",
                               juce::dontSendNotification);
     filesHeaderLabel.setFont (juce::FontOptions (10.5f, juce::Font::bold));
     filesHeaderLabel.setColour (juce::Label::textColourId, juce::Colour (0xff8888aa));
@@ -393,9 +393,8 @@ void CollabSyncEditor::timerCallback()
         repaint();
     }
 
-    // Refresh session hosting status every tick (peer count can change any time)
-    if (proc.isHostingSession() || ! proc.getSessionErrorMessage().isEmpty())
-        updateUI();
+    // Refresh UI every tick so hosting status and connection state stay current
+    updateUI();
 
     static int devTick = 0;
     if (++devTick >= 32) { devTick = 0; refreshDevices(); }
@@ -408,13 +407,14 @@ void CollabSyncEditor::updateUI()
     bool recording    = proc.isRecording();
     bool countingDown = proc.isCountingDown();
     bool hasSession   = proc.lastSessionDir.isDirectory();
+    bool hosting      = proc.isHostingSession();
 
     juce::String statusText;
     juce::Colour statusCol = juce::Colour (0xff666688);
 
-    if      (connected && recording)   { statusText = "● Recording";    statusCol = juce::Colours::red; }
+    if      (connected && recording)   { statusText = "Recording";    statusCol = juce::Colours::red; }
     else if (connected && countingDown){ statusText = "Get ready...";   statusCol = juce::Colours::orange; }
-    else if (connected)                { statusText = "● Connected";    statusCol = juce::Colours::limegreen; }
+    else if (connected)                { statusText = "Connected";    statusCol = juce::Colours::limegreen; }
     else if (proc.currentStatus.startsWith ("ERROR")) { statusText = proc.currentStatus; statusCol = juce::Colours::orangered; }
     else if (proc.currentStatus.startsWith ("Wait"))  { statusText = proc.currentStatus; statusCol = juce::Colours::orange; }
     else if (proc.currentStatus.isNotEmpty())         { statusText = proc.currentStatus; }
@@ -433,7 +433,6 @@ void CollabSyncEditor::updateUI()
     // Session hosting status
     // Use isConnected() (P2P UDP link) not joinedCount (TCP signaling) —
     // peers disconnect from signaling as soon as they've exchanged IPs.
-    bool    hosting    = proc.isHostingSession();
     auto    sessionErr = proc.getSessionErrorMessage();
     auto    tsIP       = proc.getLocalTailscaleIP(); // works regardless of server state
     bool    hasTSIP    = tsIP.isNotEmpty();
@@ -445,7 +444,7 @@ void CollabSyncEditor::updateUI()
     }
     else if (hosting && connected)
     {
-        sessionStatusLabel.setText  ("● Friend connected", juce::dontSendNotification);
+        sessionStatusLabel.setText  ("Friend connected", juce::dontSendNotification);
         sessionStatusLabel.setColour (juce::Label::textColourId, juce::Colours::limegreen);
 
         tailscaleIPLabel.setText    (hasTSIP ? tsIP : "Tailscale not detected",
@@ -456,7 +455,7 @@ void CollabSyncEditor::updateUI()
     }
     else if (hosting)
     {
-        sessionStatusLabel.setText  ("● Now hosting — waiting for friend...",
+        sessionStatusLabel.setText  ("Now hosting - waiting for friend...",
                                      juce::dontSendNotification);
         sessionStatusLabel.setColour (juce::Label::textColourId, juce::Colours::orange);
 
@@ -469,7 +468,7 @@ void CollabSyncEditor::updateUI()
     else
     {
         sessionStatusLabel.setText  (hasTSIP ? "Start a session for your friend to join"
-                                             : "Tailscale required — see README",
+                                             : "Tailscale required - see README",
                                      juce::dontSendNotification);
         sessionStatusLabel.setColour (juce::Label::textColourId,
                                       hasTSIP ? juce::Colour (0xff8888aa)

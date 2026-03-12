@@ -350,6 +350,12 @@ void CollabSyncProcessor::onPeerConnected()
 void CollabSyncProcessor::onPeerDisconnected()
 {
     peerConnected.store (false);
+
+    // If we're still hosting, rejoin the signaling server so we're ready
+    // for a new friend to connect without the host needing to do anything.
+    if (signalingServer->getState() == SignalingServer::State::Listening)
+        connect ("SYNC", "localhost");
+
     juce::MessageManager::callAsync ([this]
     {
         stateListeners.call ([] (juce::ChangeListener& l) { l.changeListenerCallback (nullptr); });

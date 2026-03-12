@@ -5,7 +5,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$PROJECT_DIR/build"
 DIST_DIR="$PROJECT_DIR/dist"
 SCRIPTS_DIR="$PROJECT_DIR/scripts"
-VERSION="0.4.1"
+VERSION="0.4.2"
 PKG_NAME="CollabSync-$VERSION.pkg"
 
 echo "==> Gathering plugin bundles..."
@@ -64,8 +64,8 @@ cat > "$DIST_DIR/welcome.html" <<EOF
 <p>Real-time collaborative music plugin for FL Studio and Logic Pro.</p>
 <p>Installs:</p>
 <ul>
-    <li>CollabSync.vst3 → /Library/Audio/Plug-Ins/VST3/</li>
-    <li>CollabSync.component → /Library/Audio/Plug-Ins/Components/</li>
+    <li>CollabSync.vst3 -&gt; /Library/Audio/Plug-Ins/VST3/</li>
+    <li>CollabSync.component -&gt; /Library/Audio/Plug-Ins/Components/</li>
 </ul>
 <p>After installing, rescan plugins in your DAW.</p>
 </body></html>
@@ -87,4 +87,4 @@ echo ""
 echo "✓ Installer ready: $DIST_DIR/$PKG_NAME"
 echo ""
 echo "Note: Because this package is unsigned, users will need to"
-echo "right-click the .pkg → Open to bypass Gatekeeper on first launch."
+echo "right-click the .pkg -> Open to bypass Gatekeeper on first launch."
