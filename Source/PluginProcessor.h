@@ -119,6 +119,7 @@ private:
     std::atomic<bool> peerConnected  { false };
     std::atomic<bool> recording      { false };
     std::atomic<int>  countdownBeat  { 0 };   // 4,3,2,1 then 0 = recording
+    bool              disconnecting  { false }; // re-entrancy guard for connect/disconnect
 
     std::unique_ptr<juce::Thread> countdownThread;
 

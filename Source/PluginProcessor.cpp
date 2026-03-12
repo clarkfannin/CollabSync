@@ -353,7 +353,8 @@ void CollabSyncProcessor::onPeerDisconnected()
 
     // If we're still hosting, rejoin the signaling server so we're ready
     // for a new friend to connect without the host needing to do anything.
-    if (signalingServer->getState() == SignalingServer::State::Listening)
+    // Guard: skip if we're already inside connect()/disconnect() to avoid infinite recursion.
+    if (! disconnecting && signalingServer->getState() == SignalingServer::State::Listening)
         connect ("SYNC", "localhost");
 
     juce::MessageManager::callAsync ([this]
@@ -382,8 +383,10 @@ void CollabSyncProcessor::connect (const juce::String& roomCode, const juce::Str
 
 void CollabSyncProcessor::disconnect()
 {
+    disconnecting = true;
     if (peer) peer->disconnect();
     peer.reset();
+    disconnecting = false;
 }
 
 void CollabSyncProcessor::triggerRecord()
