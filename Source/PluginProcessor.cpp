@@ -64,18 +64,39 @@ void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     jitterBuffer->prepare (sampleRate, samplesPerBlock);
     receiveBufferPrimed.store (false);
 
-    // Audio send thread: drains sendBuffer, encodes, sends
+    // Pre-allocate buffers used on the real-time audio thread and receive thread.
+    // Heap allocations in audio callbacks cause priority inversion on macOS.
+    int maxBlock = samplesPerBlock;
+    processBlockInterleaved.resize (static_cast<size_t> (maxBlock * 2));
+    processBlockRemote.resize      (static_cast<size_t> (maxBlock * 2));
+    // Discard buffer: large enough for the worst-case overflow drain
+    int overflowMax = (int) (sampleRate * 0.080 * 2.5) * 2;  // maxMs * 2.5, stereo
+    processBlockDiscard.resize (static_cast<size_t> (overflowMax));
+    // Decode buffer: sized for actual Opus frame, not 120ms
+    decodePcm.resize (static_cast<size_t> (2 * 960));  // max Opus frame at 48kHz = 960 (20ms)
+
+    // Audio send thread: drains sendBuffer, encodes, sends.
+    // Uses a condition variable instead of spin-wait so the OS can schedule
+    // precisely instead of coalescing our microsecond sleeps.
     sendThreadRunning.store (true);
     audioSendThread = std::thread ([this]
     {
         if (! encoder) return;
-        int opusFrameSamples = encoder->getFrameSizeSamples(); // 480 @ 48kHz
+        int opusFrameSamples = encoder->getFrameSizeSamples(); // 240 @ 48kHz/5ms
         int daqFrame         = daqFrameSamples;
         int readSize         = daqFrame * 2; // stereo interleaved
         std::vector<float> frame (static_cast<size_t> (readSize));
         std::vector<float> opusFrame;
+        std::vector<float> inL, inR, outL, outR;
         if (needsResampling)
+        {
             opusFrame.resize (static_cast<size_t> (opusFrameSamples * 2));
+            inL.resize  (static_cast<size_t> (daqFrame));
+            inR.resize  (static_cast<size_t> (daqFrame));
+            outL.resize (static_cast<size_t> (opusFrameSamples));
+            outR.resize (static_cast<size_t> (opusFrameSamples));
+        }
+        std::vector<uint8_t> pkt;
         uint32_t seq = 0;
 
         while (sendThreadRunning.load())
@@ -89,12 +110,6 @@ void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
                 if (needsResampling)
                 {
-                    // Deinterleave → resample each channel → reinterleave
-                    std::vector<float> inL (static_cast<size_t> (daqFrame));
-                    std::vector<float> inR (static_cast<size_t> (daqFrame));
-                    std::vector<float> outL (static_cast<size_t> (opusFrameSamples));
-                    std::vector<float> outR (static_cast<size_t> (opusFrameSamples));
-
                     for (int i = 0; i < daqFrame; ++i)
                     {
                         inL[static_cast<size_t> (i)] = frame[static_cast<size_t> (i * 2)];
@@ -117,11 +132,14 @@ void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
                     encodeSamps = opusFrameSamples;
                 }
 
+                if (encoderResetPending.exchange (false))
+                    encoder->resetState();
+
                 auto encoded = encoder->encode (encodeData, encodeSamps);
                 if (! encoded.empty() && peer && peer->isConnected())
                 {
                     uint64_t t = clock->sessionNow();
-                    std::vector<uint8_t> pkt (sizeof(uint32_t) + sizeof(uint64_t) + encoded.size());
+                    pkt.resize (sizeof(uint32_t) + sizeof(uint64_t) + encoded.size());
                     std::memcpy (pkt.data(), &seq, 4);
                     std::memcpy (pkt.data() + 4, &t, 8);
                     std::memcpy (pkt.data() + 12, encoded.data(), encoded.size());
@@ -131,9 +149,10 @@ void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
             }
             else
             {
-                // Use microsecond sleep to avoid macOS timer coalescing
-                // (sleep_for(1ms) can actually sleep 10-15ms on macOS)
-                std::this_thread::sleep_for (std::chrono::microseconds (200));
+                // Wait for processBlock to signal that new audio data is available.
+                // Condition variable wakes precisely — no macOS timer coalescing issues.
+                std::unique_lock<std::mutex> lk (sendCvMutex);
+                sendCv.wait_for (lk, std::chrono::milliseconds (5));
             }
         }
     });
@@ -142,6 +161,7 @@ void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 void CollabSyncProcessor::releaseResources()
 {
     sendThreadRunning.store (false);
+    sendCv.notify_one();  // wake send thread so it can see the flag and exit
     if (audioSendThread.joinable())
         audioSendThread.join();
     encoder.reset();
@@ -157,18 +177,18 @@ void CollabSyncProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // --- Capture local audio → send ring buffer (interleaved stereo) ---
     {
         int numSamples = buffer.getNumSamples();
-        std::vector<float> interleaved (static_cast<size_t>(numSamples * 2));
         const float* L = buffer.getReadPointer (0);
         const float* R = totalChannels > 1 ? buffer.getReadPointer (1) : L;
         for (int i = 0; i < numSamples; ++i)
         {
-            interleaved[static_cast<size_t>(i * 2)]     = L[i];
-            interleaved[static_cast<size_t>(i * 2 + 1)] = R[i];
+            processBlockInterleaved[static_cast<size_t>(i * 2)]     = L[i];
+            processBlockInterleaved[static_cast<size_t>(i * 2 + 1)] = R[i];
         }
-        sendBuffer.write (interleaved.data(), numSamples * 2);
+        sendBuffer.write (processBlockInterleaved.data(), numSamples * 2);
+        sendCv.notify_one();  // wake send thread — data is available
 
         if (recorder->isRecording())
-            recorder->appendLocalAudio (interleaved.data(), numSamples);
+            recorder->appendLocalAudio (processBlockInterleaved.data(), numSamples);
     }
 
     // --- Inject received remote audio from receive ring buffer ---
@@ -195,9 +215,9 @@ void CollabSyncProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                 int excess = available - preBufferStereo - needed;
                 if (excess > 0)
                 {
-                    std::vector<float> discard (static_cast<size_t> (excess));
-                    receiveBuffer.read (discard.data(), excess);
-                    available -= excess;
+                    int toDrain = std::min (excess, (int) processBlockDiscard.size());
+                    receiveBuffer.read (processBlockDiscard.data(), toDrain);
+                    available -= toDrain;
                 }
                 receiveBufferPrimed.store (true, std::memory_order_relaxed);
             }
@@ -209,9 +229,9 @@ void CollabSyncProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             int skip   = available - target;
             if (skip > 0)
             {
-                std::vector<float> discard (static_cast<size_t> (skip));
-                receiveBuffer.read (discard.data(), skip);
-                available -= skip;
+                int toDrain = std::min (skip, (int) processBlockDiscard.size());
+                receiveBuffer.read (processBlockDiscard.data(), toDrain);
+                available -= toDrain;
             }
         }
         else if (available < needed)
@@ -227,15 +247,14 @@ void CollabSyncProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
         if (receiveBufferPrimed.load (std::memory_order_relaxed) && available >= needed)
         {
-            std::vector<float> remote (static_cast<size_t> (needed));
-            receiveBuffer.read (remote.data(), needed);
+            receiveBuffer.read (processBlockRemote.data(), needed);
 
             float* L = buffer.getWritePointer (0);
             float* R = totalChannels > 1 ? buffer.getWritePointer (1) : nullptr;
             for (int i = 0; i < numSamples; ++i)
             {
-                L[i] += remote[static_cast<size_t> (i * 2)];
-                if (R) R[i] += remote[static_cast<size_t> (i * 2 + 1)];
+                L[i] += processBlockRemote[static_cast<size_t> (i * 2)];
+                if (R) R[i] += processBlockRemote[static_cast<size_t> (i * 2 + 1)];
             }
         }
     }
@@ -274,8 +293,10 @@ void CollabSyncProcessor::onAudioPacketReceived (const uint8_t* data, size_t siz
     int            opusSize = (int) size - 12;
     if (opusSize <= 0) return;
 
-    std::vector<float> pcm (static_cast<size_t> (2 * 5760));
-    int frames = decoder->decode (opusData, opusSize, pcm.data(), 5760);
+    if (decoderResetPending.exchange (false))
+        decoder->resetState();
+
+    int frames = decoder->decode (opusData, opusSize, decodePcm.data(), 960);
     if (frames <= 0)
     {
         decodeFailures.fetch_add (1, std::memory_order_relaxed);
@@ -292,8 +313,8 @@ void CollabSyncProcessor::onAudioPacketReceived (const uint8_t* data, size_t siz
             std::vector<float> inR (static_cast<size_t> (frames));
             for (int i = 0; i < frames; ++i)
             {
-                inL[static_cast<size_t> (i)] = pcm[static_cast<size_t> (i * 2)];
-                inR[static_cast<size_t> (i)] = pcm[static_cast<size_t> (i * 2 + 1)];
+                inL[static_cast<size_t> (i)] = decodePcm[static_cast<size_t> (i * 2)];
+                inR[static_cast<size_t> (i)] = decodePcm[static_cast<size_t> (i * 2 + 1)];
             }
             std::vector<float> outL (static_cast<size_t> (outSamples));
             std::vector<float> outR (static_cast<size_t> (outSamples));
@@ -314,9 +335,9 @@ void CollabSyncProcessor::onAudioPacketReceived (const uint8_t* data, size_t siz
         }
         else
         {
-            receiveBuffer.write (pcm.data(), frames * 2);
+            receiveBuffer.write (decodePcm.data(), frames * 2);
             if (recorder->isRecording())
-                recorder->appendRemoteAudio (pcm.data(), frames);
+                recorder->appendRemoteAudio (decodePcm.data(), frames);
         }
     }
 }
@@ -339,7 +360,12 @@ void CollabSyncProcessor::onPeerConnected()
     peerConnected.store (true);
     receiveBufferPrimed.store (false);
     receiveBuffer.reset();
+    sendBuffer.reset();
     jitterBuffer->reset();
+    // Signal the owning threads to reset — direct calls here race with the
+    // send thread (encoder) and UDP receive thread (decoder).
+    encoderResetPending.store (true);
+    decoderResetPending.store (true);
     clock->setSessionStart (SessionClock::localNow());
     juce::MessageManager::callAsync ([this]
     {

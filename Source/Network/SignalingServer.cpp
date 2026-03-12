@@ -150,7 +150,18 @@ void SignalingServer::serveClient (juce::StreamingSocket* sock)
             }
 
             juce::String myIP = getRemoteIP (sock);
-            if (myIP.isEmpty()) myIP = "127.0.0.1";
+            // If the client connected from localhost (host auto-connecting to their
+            // own server), the guest would receive "127.0.0.1" as the peer address
+            // and send audio to their own loopback instead of the host's machine.
+            // Substitute with the server's actual external IP so both sides reach each other.
+            if (myIP.isEmpty() || myIP == "127.0.0.1" || myIP == "::1")
+            {
+                std::lock_guard<std::mutex> metaLock (metaMutex);
+                if (tailscaleIP.isNotEmpty())
+                    myIP = tailscaleIP;
+                else
+                    myIP = "127.0.0.1"; // last resort — same machine
+            }
 
             {
                 std::lock_guard<std::mutex> lock (roomsMutex);

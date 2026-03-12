@@ -1,6 +1,6 @@
 #pragma once
 
-#define COLLABSYNC_VERSION "0.4.3"
+#define COLLABSYNC_VERSION "0.5.0"
 
 #include <JuceHeader.h>
 #include "Network/PeerConnection.h"
@@ -13,6 +13,7 @@
 #include "Session/Recorder.h"
 #include <mutex>
 #include <thread>
+#include <condition_variable>
 
 class CollabSyncProcessor : public juce::AudioProcessor,
                              public PeerConnection::Listener
@@ -111,15 +112,19 @@ private:
     // Background thread for encoding + sending audio
     std::atomic<bool> sendThreadRunning { false };
     std::thread       audioSendThread;
+    std::mutex              sendCvMutex;
+    std::condition_variable sendCv;       // notified from processBlock when data is written
 
     // Pending remote MIDI to inject in next processBlock
     std::mutex remoteMidiMutex;
     std::vector<juce::MidiMessage> pendingRemoteMidi;
 
-    std::atomic<bool> peerConnected  { false };
-    std::atomic<bool> recording      { false };
-    std::atomic<int>  countdownBeat  { 0 };   // 4,3,2,1 then 0 = recording
-    bool              disconnecting  { false }; // re-entrancy guard for connect/disconnect
+    std::atomic<bool> peerConnected       { false };
+    std::atomic<bool> recording           { false };
+    std::atomic<int>  countdownBeat       { 0 };   // 4,3,2,1 then 0 = recording
+    bool              disconnecting       { false }; // re-entrancy guard for connect/disconnect
+    std::atomic<bool> encoderResetPending { false }; // set by onPeerConnected, consumed by send thread
+    std::atomic<bool> decoderResetPending { false }; // set by onPeerConnected, consumed by recv thread
 
     std::unique_ptr<juce::Thread> countdownThread;
 
@@ -131,6 +136,12 @@ private:
 
     // Pre-buffering: accumulate remote audio before playback to avoid choppy output
     std::atomic<bool> receiveBufferPrimed { false };
+
+    // Pre-allocated buffers to avoid heap allocations on audio/network threads
+    std::vector<float> processBlockInterleaved;   // processBlock: capture local audio
+    std::vector<float> processBlockRemote;         // processBlock: receive remote audio
+    std::vector<float> processBlockDiscard;        // processBlock: overflow/drain discard
+    std::vector<float> decodePcm;                  // onAudioPacketReceived: decode output
 
 public:
     // Diagnostics (public for editor access)

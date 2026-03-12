@@ -19,7 +19,7 @@ public:
         enc = opus_encoder_create (sampleRate, channels, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &err);
         if (err != OPUS_OK) throw std::runtime_error ("opus_encoder_create failed");
 
-        opus_encoder_ctl (enc, OPUS_SET_BITRATE (128000));
+        opus_encoder_ctl (enc, OPUS_SET_BITRATE (192000));
         opus_encoder_ctl (enc, OPUS_SET_SIGNAL (OPUS_SIGNAL_MUSIC));
         opus_encoder_ctl (enc, OPUS_SET_COMPLEXITY (5));
     }
@@ -38,6 +38,8 @@ public:
 
     int getFrameSizeSamples() const { return frameSizeSamples; }
     int getChannels()         const { return channels; }
+
+    void resetState() { if (enc) opus_encoder_ctl (enc, OPUS_RESET_STATE); }
 
 private:
     ::OpusEncoder* enc = nullptr;
@@ -65,6 +67,8 @@ public:
             plc ? 0       : dataLen,
             pcmOut, maxFrames, plc ? 1 : 0);
     }
+
+    void resetState() { if (dec) opus_decoder_ctl (dec, OPUS_RESET_STATE); }
 
 private:
     ::OpusDecoder* dec = nullptr;
