@@ -50,6 +50,20 @@ public:
         }
     }
 
+    // Call directly from a MidiInputCallback (system MIDI, not host buffer).
+    // No sample-position math needed — just stamp with current session time.
+    void captureDirect (const juce::MidiMessage& msg, uint64_t sessionNowNs)
+    {
+        MidiPacket pkt;
+        pkt.sessionTimeNs = sessionNowNs;
+        pkt.status  = static_cast<uint8_t> (msg.getRawData()[0] & 0xF0);
+        pkt.channel = static_cast<uint8_t> (msg.getChannel() - 1);
+        pkt.data1   = msg.getRawDataSize() > 1 ? msg.getRawData()[1] : 0;
+        pkt.data2   = msg.getRawDataSize() > 2 ? msg.getRawData()[2] : 0;
+
+        if (sendCallback) sendCallback (pkt);
+    }
+
     // Convert incoming remote MidiPackets back into JUCE messages for injection.
     // sessionNowNs: current session time; returns sample offset within current block.
     static juce::MidiMessage toJuceMessage (const MidiPacket& pkt)

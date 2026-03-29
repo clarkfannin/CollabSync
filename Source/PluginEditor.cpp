@@ -111,6 +111,12 @@ CollabSyncEditor::CollabSyncEditor (CollabSyncProcessor& p)
         else if (! proc.isCountingDown()) proc.triggerRecord();
     };
 
+    // ---- MIDI indicator ----
+    midiLabel.setText ("MIDI IN", juce::dontSendNotification);
+    midiLabel.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+    midiLabel.setColour (juce::Label::textColourId, DIM);
+    addAndMakeVisible (midiLabel);
+
     // ---- Diagnostics ----
     diagLabel.setFont (juce::FontOptions (9.0f));
     diagLabel.setColour (juce::Label::textColourId, juce::Colour (0xff383850));
@@ -158,6 +164,28 @@ void CollabSyncEditor::paint (juce::Graphics& g)
     // Bottom edge of header
     g.setColour (BORDER);
     g.drawHorizontalLine (52, 0.0f, (float) getWidth());
+
+    // MIDI activity light (drawn next to the midiLabel)
+    {
+        auto lb = midiLabel.getBounds();
+        int cx = lb.getRight() + 8;
+        int cy = lb.getCentreY();
+        int r  = 4;
+        if (midiLightOn)
+        {
+            g.setColour (juce::Colour (0xff3dff6f));
+            g.fillEllipse ((float) (cx - r), (float) (cy - r), (float) (r * 2), (float) (r * 2));
+            // Glow
+            g.setColour (juce::Colour (0xff3dff6f).withAlpha (0.25f));
+            g.fillEllipse ((float) (cx - r - 2), (float) (cy - r - 2),
+                           (float) (r * 2 + 4), (float) (r * 2 + 4));
+        }
+        else
+        {
+            g.setColour (juce::Colour (0xff2a2a3a));
+            g.fillEllipse ((float) (cx - r), (float) (cy - r), (float) (r * 2), (float) (r * 2));
+        }
+    }
 
     // Countdown dim overlay
     if (proc.isCountingDown())
@@ -230,6 +258,10 @@ void CollabSyncEditor::resized()
     recordButton.setBounds (pad, y, w, 38);
     y += 46;
 
+    // MIDI indicator
+    midiLabel.setBounds (pad, y, 50, 14);
+    y += 18;
+
     // Diagnostics
     diagLabel.setBounds (pad, y, w, 13);
     y += 20;
@@ -244,25 +276,27 @@ void CollabSyncEditor::resized()
         filesHeaderLabel.setBounds (pad, y, w, 14);
         y += 20;
 
+        // WAV tiles: full width, taller for waveform
+        if (localWavTile)  { localWavTile->setBounds  (pad, y, w, 44); localWavTile->setVisible (true);  }
+        y += 50;
+        if (remoteWavTile) { remoteWavTile->setBounds (pad, y, w, 44); remoteWavTile->setVisible (true); }
+        y += 50;
+
+        // MIDI tiles: side by side
         int tileW = (w - 8) / 2;
-        for (int i = 0; i < 4; ++i)
-        {
-            if (fileTiles[i])
-            {
-                fileTiles[i]->setBounds (pad + (i % 2) * (tileW + 8),
-                                         y   + (i / 2) * 34,
-                                         tileW, 28);
-                fileTiles[i]->setVisible (true);
-            }
-        }
-        y += 74;
+        if (localMidTile)  { localMidTile->setBounds  (pad,               y, tileW, 28); localMidTile->setVisible (true);  }
+        if (remoteMidTile) { remoteMidTile->setBounds (pad + tileW + 8,   y, tileW, 28); remoteMidTile->setVisible (true); }
+        y += 34;
+
         showInFinderButton.setBounds (pad, y, w, 26);
         y += 32;
     }
     else
     {
-        for (auto& t : fileTiles)
-            if (t) t->setVisible (false);
+        if (localWavTile)  localWavTile->setVisible (false);
+        if (remoteWavTile) remoteWavTile->setVisible (false);
+        if (localMidTile)  localMidTile->setVisible (false);
+        if (remoteMidTile) remoteMidTile->setVisible (false);
     }
 
     // Resize window to fit content
@@ -301,6 +335,16 @@ void CollabSyncEditor::timerCallback()
     {
         latencyLabel.setText ({}, juce::dontSendNotification);
         diagLabel.setText    ({}, juce::dontSendNotification);
+    }
+
+    // MIDI activity light
+    {
+        bool newMidiState = proc.anyMidiNoteHeld();
+        if (newMidiState != midiLightOn)
+        {
+            midiLightOn = newMidiState;
+            repaint();
+        }
     }
 
     bool counting = proc.isCountingDown();
@@ -390,16 +434,30 @@ void CollabSyncEditor::updateUI()
 //==============================================================================
 void CollabSyncEditor::rebuildFileTiles()
 {
-    static const char* names[]  = { "local.wav", "remote.wav", "local.mid", "remote.mid" };
-
-    for (int i = 0; i < 4; ++i)
+    auto buildWav = [&] (std::unique_ptr<WaveformTile>& tile, const char* name)
     {
-        auto file = proc.lastSessionDir.getChildFile (names[i]);
-        if (file.existsAsFile() && (! fileTiles[i] || fileTiles[i]->getName() != names[i]))
+        auto file = proc.lastSessionDir.getChildFile (name);
+        if (file.existsAsFile() && (! tile || tile->getName() != name))
         {
-            fileTiles[i] = std::make_unique<FileTile> (file, names[i]);
-            fileTiles[i]->setName (names[i]);
-            addAndMakeVisible (*fileTiles[i]);
+            tile = std::make_unique<WaveformTile> (file, name);
+            tile->setName (name);
+            addAndMakeVisible (*tile);
         }
-    }
+    };
+
+    auto buildMid = [&] (std::unique_ptr<FileTile>& tile, const char* name)
+    {
+        auto file = proc.lastSessionDir.getChildFile (name);
+        if (file.existsAsFile() && (! tile || tile->getName() != name))
+        {
+            tile = std::make_unique<FileTile> (file, name);
+            tile->setName (name);
+            addAndMakeVisible (*tile);
+        }
+    };
+
+    buildWav (localWavTile,  "local.wav");
+    buildWav (remoteWavTile, "remote.wav");
+    buildMid (localMidTile,  "local.mid");
+    buildMid (remoteMidTile, "remote.mid");
 }

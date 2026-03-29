@@ -1,6 +1,6 @@
 #pragma once
 
-#define COLLABSYNC_VERSION "0.5.0"
+#define COLLABSYNC_VERSION "0.6.0"
 
 #include <JuceHeader.h>
 #include "Network/PeerConnection.h"
@@ -16,7 +16,8 @@
 #include <condition_variable>
 
 class CollabSyncProcessor : public juce::AudioProcessor,
-                             public PeerConnection::Listener
+                             public PeerConnection::Listener,
+                             public juce::MidiInputCallback
 {
 public:
     CollabSyncProcessor();
@@ -72,12 +73,27 @@ public:
     void onCountdownReceived (float bpm) override;
     void onStopReceived      ()          override;
 
+    // MidiInputCallback — direct system MIDI (CoreMIDI, bypasses DAW)
+    void handleIncomingMidiMessage (juce::MidiInput* source,
+                                    const juce::MidiMessage& message) override;
+
+    // Direct MIDI device management
+    void openMidiInputs();
+    void closeMidiInputs();
+    bool hasDirectMidiInputs() const { return ! midiInputDevices.empty(); }
+
     // State queries
     bool  isConnected()      const { return peerConnected.load(); }
     bool  isRecording()      const { return recording.load(); }
     bool  isCountingDown()   const { return countdownBeat.load() > 0; }
     int   getCountdownBeat() const { return countdownBeat.load(); }
     float getLatencyMs()     const;
+    bool  anyMidiNoteHeld() const
+    {
+        for (int i = 0; i < 128; ++i)
+            if (midiNoteState[i].load (std::memory_order_relaxed)) return true;
+        return false;
+    }
 
     juce::ListenerList<juce::ChangeListener> stateListeners;
     juce::String currentStatus;
@@ -128,6 +144,9 @@ private:
 
     std::unique_ptr<juce::Thread> countdownThread;
 
+    // Direct system MIDI input (CoreMIDI)
+    std::vector<std::unique_ptr<juce::MidiInput>> midiInputDevices;
+
     // Sample rate resampling (Opus always operates at 48kHz)
     bool needsResampling = false;
     int  daqFrameSamples = 480;  // Opus frame size in DAW-rate samples
@@ -150,6 +169,7 @@ public:
     std::atomic<uint32_t> decodeFailures    { 0 };
     std::atomic<uint32_t> bufferUnderruns   { 0 };
     std::atomic<int>      recvBufferLevel   { 0 };  // current fill in floats
+    std::atomic<bool>     midiNoteState[128] {};  // per-note held tracking (lock-free)
 private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CollabSyncProcessor)

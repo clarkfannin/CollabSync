@@ -20,11 +20,54 @@ CollabSyncProcessor::CollabSyncProcessor()
         if (recorder->isRecording())
             recorder->appendLocalMidi (pkt);
     });
+
+    // Open all system MIDI inputs (CoreMIDI) — bypasses DAW routing
+    openMidiInputs();
 }
 
 CollabSyncProcessor::~CollabSyncProcessor()
 {
+    closeMidiInputs();
     if (peer) peer->disconnect();
+}
+
+//==============================================================================
+void CollabSyncProcessor::openMidiInputs()
+{
+    closeMidiInputs();
+    auto devices = juce::MidiInput::getAvailableDevices();
+    for (auto& dev : devices)
+    {
+        auto input = juce::MidiInput::openDevice (dev.identifier, this);
+        if (input)
+        {
+            DBG ("Opened MIDI device: " << dev.name);
+            input->start();
+            midiInputDevices.push_back (std::move (input));
+        }
+    }
+}
+
+void CollabSyncProcessor::closeMidiInputs()
+{
+    for (auto& input : midiInputDevices)
+        input->stop();
+    midiInputDevices.clear();
+    for (auto& n : midiNoteState) n.store (false, std::memory_order_relaxed);
+}
+
+void CollabSyncProcessor::handleIncomingMidiMessage (juce::MidiInput* /*source*/,
+                                                      const juce::MidiMessage& msg)
+{
+    // Per-note tracking for the MIDI activity light (before the
+    // potentially-blocking captureDirect call so the UI stays responsive)
+    if (msg.isNoteOn())
+        midiNoteState[msg.getNoteNumber()].store (true, std::memory_order_relaxed);
+    else if (msg.isNoteOff())
+        midiNoteState[msg.getNoteNumber()].store (false, std::memory_order_relaxed);
+
+    // Send over network + record via the same path as host MIDI
+    midiCapture->captureDirect (msg, clock->sessionNow());
 }
 
 void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -260,7 +303,8 @@ void CollabSyncProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
 
     // --- Capture local MIDI → network ---
-    if (! midiMessages.isEmpty())
+    // Skip host-routed MIDI when direct system MIDI inputs are active to avoid duplicates.
+    if (! midiMessages.isEmpty() && midiInputDevices.empty())
     {
         auto pos = getPlayHead() ? getPlayHead()->getPosition() : juce::Optional<juce::AudioPlayHead::PositionInfo>();
         int64_t blockStart = pos.hasValue() ? pos->getTimeInSamples().orFallback(0) : 0;
@@ -489,6 +533,7 @@ void CollabSyncProcessor::onStopReceived()
 {
     if (! isRecording()) return;
     recording.store (false);
+    for (auto& n : midiNoteState) n.store (false, std::memory_order_relaxed);
     lastSessionDir = recorder->stopRecording();
     juce::MessageManager::callAsync ([this] {
         stateListeners.call ([] (juce::ChangeListener& l) { l.changeListenerCallback (nullptr); });
