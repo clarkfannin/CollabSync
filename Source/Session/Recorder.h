@@ -18,21 +18,42 @@ public:
         this->outputDir   = outputDir;
         outputDir.createDirectory();
 
+        // Pre-size for ~10 minutes of stereo audio so the audio/network threads
+        // don't reallocate (and stall on heap) inside append*() while recording.
+        const size_t reserveSamples = static_cast<size_t> (sampleRate) * static_cast<size_t> (numChannels) * 600;
+
         {
-            std::lock_guard<std::mutex> lock (mtx);
+            std::lock_guard<std::mutex> lock (audioMtx);
             audioSamples.clear();
-            midiEvents.clear();
-            remoteMidiEvents.clear();
+            audioSamples.reserve (reserveSamples);
+        }
+        {
+            std::lock_guard<std::mutex> lock (remoteAudioMtx);
             remoteAudioSamples.clear();
+            remoteAudioSamples.reserve (reserveSamples);
+        }
+        {
+            std::lock_guard<std::mutex> lock (midiMtx);
+            midiEvents.clear();
+            midiEvents.reserve (8192);
+        }
+        {
+            std::lock_guard<std::mutex> lock (remoteMidiMtx);
+            remoteMidiEvents.clear();
+            remoteMidiEvents.reserve (8192);
         }
         active = true;
     }
 
-    // Call from audio thread — appends local audio
+    // Call from audio thread — appends local audio.
+    // Uses a dedicated mutex so it never contends with the UDP receive thread
+    // (appendRemoteAudio). Sharing a mutex caused the audio thread to block
+    // on heap-reallocating inserts in the network thread → crackles when both
+    // peers were playing simultaneously.
     void appendLocalAudio (const float* interleaved, int numFrames)
     {
         if (! active) return;
-        std::lock_guard<std::mutex> lock (mtx);
+        std::lock_guard<std::mutex> lock (audioMtx);
         audioSamples.insert (audioSamples.end(), interleaved, interleaved + numFrames * numChannels);
     }
 
@@ -40,21 +61,21 @@ public:
     void appendRemoteAudio (const float* interleaved, int numFrames)
     {
         if (! active) return;
-        std::lock_guard<std::mutex> lock (mtx);
+        std::lock_guard<std::mutex> lock (remoteAudioMtx);
         remoteAudioSamples.insert (remoteAudioSamples.end(), interleaved, interleaved + numFrames * numChannels);
     }
 
     void appendLocalMidi  (const MidiPacket& pkt)
     {
         if (! active) return;
-        std::lock_guard<std::mutex> lock (mtx);
+        std::lock_guard<std::mutex> lock (midiMtx);
         midiEvents.push_back (pkt);
     }
 
     void appendRemoteMidi (const MidiPacket& pkt)
     {
         if (! active) return;
-        std::lock_guard<std::mutex> lock (mtx);
+        std::lock_guard<std::mutex> lock (remoteMidiMtx);
         remoteMidiEvents.push_back (pkt);
     }
 
@@ -120,7 +141,13 @@ private:
     }
 
     std::atomic<bool> active { false };
-    std::mutex mtx;
+    // Per-stream mutexes — each stream has exactly one writer thread, so these
+    // never block the producer. The split prevents the audio thread from
+    // contending with the UDP receive thread.
+    std::mutex audioMtx;
+    std::mutex remoteAudioMtx;
+    std::mutex midiMtx;
+    std::mutex remoteMidiMtx;
 
     double sampleRate  = 48000.0;
     int    numChannels = 2;

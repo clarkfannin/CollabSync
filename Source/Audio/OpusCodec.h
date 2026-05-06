@@ -22,6 +22,11 @@ public:
         opus_encoder_ctl (enc, OPUS_SET_BITRATE (192000));
         opus_encoder_ctl (enc, OPUS_SET_SIGNAL (OPUS_SIGNAL_MUSIC));
         opus_encoder_ctl (enc, OPUS_SET_COMPLEXITY (5));
+        // Inband FEC: bundle low-bitrate redundancy of the previous frame into
+        // the current packet. Lets the decoder recover a single-packet drop on
+        // unreliable links (WiFi). Costs ~10% bitrate for the loss-percentage hint.
+        opus_encoder_ctl (enc, OPUS_SET_INBAND_FEC (1));
+        opus_encoder_ctl (enc, OPUS_SET_PACKET_LOSS_PERC (10));
     }
 
     ~OpusEncoder() { if (enc) opus_encoder_destroy (enc); }
@@ -59,13 +64,16 @@ public:
 
     ~OpusDecoder() { if (dec) opus_decoder_destroy (dec); }
 
-    // Decode to interleaved float PCM. Pass nullptr data for PLC (packet loss concealment).
-    int decode (const uint8_t* data, int dataLen, float* pcmOut, int maxFrames, bool plc = false)
+    // Decode to interleaved float PCM.
+    //   plc=true  → synthesize a missing frame (pass any maxFrames; data ignored)
+    //   fec=true  → recover the previous lost frame from this packet's FEC payload
+    //   both false → normal decode of this packet
+    int decode (const uint8_t* data, int dataLen, float* pcmOut, int maxFrames,
+                bool plc = false, bool fec = false)
     {
-        return opus_decode_float (dec,
-            plc ? nullptr : data,
-            plc ? 0       : dataLen,
-            pcmOut, maxFrames, plc ? 1 : 0);
+        if (plc)
+            return opus_decode_float (dec, nullptr, 0, pcmOut, maxFrames, 0);
+        return opus_decode_float (dec, data, dataLen, pcmOut, maxFrames, fec ? 1 : 0);
     }
 
     void resetState() { if (dec) opus_decoder_ctl (dec, OPUS_RESET_STATE); }

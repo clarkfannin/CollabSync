@@ -9,16 +9,28 @@ CollabSyncProcessor::CollabSyncProcessor()
     signalingServer = std::make_unique<SignalingServer>();
     clock      = std::make_unique<SessionClock>();
     midiCapture = std::make_unique<MidiCapture>();
-    jitterBuffer = std::make_unique<JitterBuffer> (20, 80); // 20ms target, 80ms max
+    jitterBuffer = std::make_unique<JitterBuffer> (20, 200); // 20ms target, 200ms max (WiFi headroom)
     recorder   = std::make_unique<Recorder>();
 
-    // Wire MIDI capture to send over network
+    // Pre-allocate the lock-free MIDI recording queue
+    midiRecordQueue.resize (2048);
+
+    // Wire MIDI capture to send over network.
+    // Recording goes through a lock-free FIFO (drained in processBlock)
+    // so this callback never blocks on the Recorder mutex.
     midiCapture->setSendCallback ([this] (const MidiPacket& pkt)
     {
         if (peer && peer->isConnected())
             peer->sendMidi (reinterpret_cast<const uint8_t*>(&pkt), sizeof(pkt));
+
         if (recorder->isRecording())
-            recorder->appendLocalMidi (pkt);
+        {
+            const auto scope = midiRecordFifo.write (1);
+            if (scope.blockSize1 > 0)
+                midiRecordQueue[static_cast<size_t> (scope.startIndex1)] = pkt;
+            else if (scope.blockSize2 > 0)
+                midiRecordQueue[static_cast<size_t> (scope.startIndex2)] = pkt;
+        }
     });
 
     // Open all system MIDI inputs (CoreMIDI) — bypasses DAW routing
@@ -81,7 +93,10 @@ void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
     try
     {
-        encoder = std::make_unique<OpusEncoder> (48000, 2, 5.0f); // 5ms frames for lowest latency
+        // 20ms frames: 50 packets/sec instead of 200. Each lost packet matters
+        // less because Opus FEC can recover one and PLC fills the rest. Net latency
+        // bump ~15ms, but reliability over WiFi is dramatically better.
+        encoder = std::make_unique<OpusEncoder> (48000, 2, 20.0f);
         decoder = std::make_unique<OpusDecoder> (48000, 2);
     }
     catch (const std::exception& e)
@@ -113,10 +128,25 @@ void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     processBlockInterleaved.resize (static_cast<size_t> (maxBlock * 2));
     processBlockRemote.resize      (static_cast<size_t> (maxBlock * 2));
     // Discard buffer: large enough for the worst-case overflow drain
-    int overflowMax = (int) (sampleRate * 0.080 * 2.5) * 2;  // maxMs * 2.5, stereo
+    int overflowMax = (int) (sampleRate * 0.200 * 2.5) * 2;  // maxMs (200) * 2.5, stereo
     processBlockDiscard.resize (static_cast<size_t> (overflowMax));
-    // Decode buffer: sized for actual Opus frame, not 120ms
-    decodePcm.resize (static_cast<size_t> (2 * 960));  // max Opus frame at 48kHz = 960 (20ms)
+    // Decode buffer: sized for one 20ms Opus frame at 48kHz (960 stereo samples)
+    decodePcm.resize (static_cast<size_t> (2 * 960));
+
+    // Pre-allocate receive-thread resample scratch buffers — Opus always decodes
+    // at 48kHz, so the resampler outputs (frames * sampleRate / 48000) samples.
+    int recvOpusFrames = 960; // 20ms at 48kHz
+    int recvDawFrames  = (int) std::ceil (recvOpusFrames * sampleRate / 48000.0) + 4;
+    recvResampleInL.assign (static_cast<size_t> (recvOpusFrames), 0.0f);
+    recvResampleInR.assign (static_cast<size_t> (recvOpusFrames), 0.0f);
+    recvResampleOutL.assign (static_cast<size_t> (recvDawFrames), 0.0f);
+    recvResampleOutR.assign (static_cast<size_t> (recvDawFrames), 0.0f);
+    recvResampleInterleaved.assign (static_cast<size_t> (recvDawFrames * 2), 0.0f);
+
+    // Reset sequence-tracked PLC/FEC state
+    haveLastSeq          = false;
+    lastDecodedSeq       = 0;
+    consecutiveUnderruns = 0;
 
     // Audio send thread: drains sendBuffer, encodes, sends.
     // Uses a condition variable instead of spin-wait so the OS can schedule
@@ -279,11 +309,22 @@ void CollabSyncProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
         else if (available < needed)
         {
-            // Buffer underrun — notify adaptive controller, re-prime.
-            // Clean silence is far better than partial reads + zero-fill (crackling).
+            // Buffer underrun. Skip mixing this block (remote stays silent for
+            // ~one block) and bump the adaptive jitter target. Only fully
+            // re-prime after several consecutive underruns — a single hiccup
+            // shouldn't cascade into a long silent period while the buffer refills.
             jitterBuffer->notifyDrop (nowMs);
-            receiveBufferPrimed.store (false, std::memory_order_relaxed);
             bufferUnderruns.fetch_add (1, std::memory_order_relaxed);
+            ++consecutiveUnderruns;
+            if (consecutiveUnderruns >= 3)
+            {
+                receiveBufferPrimed.store (false, std::memory_order_relaxed);
+                consecutiveUnderruns = 0;
+            }
+        }
+        else
+        {
+            consecutiveUnderruns = 0;
         }
 
         recvBufferLevel.store (available, std::memory_order_relaxed);
@@ -323,6 +364,15 @@ void CollabSyncProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             pendingRemoteMidi.clear();
         }
     }
+
+    // --- Drain MIDI recording FIFO into Recorder (lock-free read) ---
+    {
+        const auto scope = midiRecordFifo.read (midiRecordFifo.getNumReady());
+        for (int i = 0; i < scope.blockSize1; ++i)
+            recorder->appendLocalMidi (midiRecordQueue[static_cast<size_t> (scope.startIndex1 + i)]);
+        for (int i = 0; i < scope.blockSize2; ++i)
+            recorder->appendLocalMidi (midiRecordQueue[static_cast<size_t> (scope.startIndex2 + i)]);
+    }
 }
 
 //==============================================================================
@@ -332,13 +382,79 @@ void CollabSyncProcessor::onAudioPacketReceived (const uint8_t* data, size_t siz
 
     if (size < 12 || ! decoder) return;
 
-    // Opus data starts at byte 12 (after 4-byte seq + 8-byte timestamp in payload)
+    // Payload layout: [4-byte seq][8-byte timestamp][opus frame...]
+    uint32_t       seq      = 0;
+    std::memcpy (&seq, data, 4);
     const uint8_t* opusData = data + 12;
     int            opusSize = (int) size - 12;
     if (opusSize <= 0) return;
 
     if (decoderResetPending.exchange (false))
+    {
         decoder->resetState();
+        haveLastSeq = false;
+    }
+
+    auto pushDecoded = [this] (int frames)
+    {
+        if (frames <= 0) return;
+        if (needsResampling)
+        {
+            int outSamples = (int) (frames * currentSampleRate / 48000.0);
+            for (int i = 0; i < frames; ++i)
+            {
+                recvResampleInL[static_cast<size_t> (i)] = decodePcm[static_cast<size_t> (i * 2)];
+                recvResampleInR[static_cast<size_t> (i)] = decodePcm[static_cast<size_t> (i * 2 + 1)];
+            }
+            double ratio = 48000.0 / currentSampleRate;
+            recvResamplerL.process (ratio, recvResampleInL.data(), recvResampleOutL.data(),
+                                    outSamples, frames, 0);
+            recvResamplerR.process (ratio, recvResampleInR.data(), recvResampleOutR.data(),
+                                    outSamples, frames, 0);
+            for (int i = 0; i < outSamples; ++i)
+            {
+                recvResampleInterleaved[static_cast<size_t> (i * 2)]     = recvResampleOutL[static_cast<size_t> (i)];
+                recvResampleInterleaved[static_cast<size_t> (i * 2 + 1)] = recvResampleOutR[static_cast<size_t> (i)];
+            }
+            receiveBuffer.write (recvResampleInterleaved.data(), outSamples * 2);
+            if (recorder->isRecording())
+                recorder->appendRemoteAudio (recvResampleInterleaved.data(), outSamples);
+        }
+        else
+        {
+            receiveBuffer.write (decodePcm.data(), frames * 2);
+            if (recorder->isRecording())
+                recorder->appendRemoteAudio (decodePcm.data(), frames);
+        }
+    };
+
+    // --- Gap recovery: if seq jumped past lastDecodedSeq+1, fill the missing
+    //     frames with FEC (most recent missing, recovered from THIS packet's
+    //     redundancy payload) and PLC (earlier missing, synthesized).
+    //     Skips out-of-order or duplicate packets — Opus state would corrupt.
+    if (haveLastSeq)
+    {
+        if (seq <= lastDecodedSeq)
+            return; // late or duplicate; ignore
+
+        uint32_t missing = seq - lastDecodedSeq - 1;
+        if (missing > 0)
+        {
+            // Cap concealment work — beyond ~10 lost packets the link is in
+            // genuine trouble and synthesizing more just smears artifacts.
+            uint32_t plcCount = std::min<uint32_t> (missing > 1 ? missing - 1 : 0, 10);
+
+            for (uint32_t i = 0; i < plcCount; ++i)
+            {
+                int f = decoder->decode (nullptr, 0, decodePcm.data(), 960, /*plc*/ true);
+                pushDecoded (f);
+            }
+            // FEC the most recent missing using THIS packet's redundancy
+            int fecFrames = decoder->decode (opusData, opusSize, decodePcm.data(), 960,
+                                             /*plc*/ false, /*fec*/ true);
+            pushDecoded (fecFrames);
+        }
+    }
 
     int frames = decoder->decode (opusData, opusSize, decodePcm.data(), 960);
     if (frames <= 0)
@@ -348,42 +464,10 @@ void CollabSyncProcessor::onAudioPacketReceived (const uint8_t* data, size_t siz
     }
     decodeSuccesses.fetch_add (1, std::memory_order_relaxed);
 
-    {
-        if (needsResampling)
-        {
-            // Opus decoded at 48kHz → resample to DAW rate
-            int outSamples = (int) (frames * currentSampleRate / 48000.0);
-            std::vector<float> inL (static_cast<size_t> (frames));
-            std::vector<float> inR (static_cast<size_t> (frames));
-            for (int i = 0; i < frames; ++i)
-            {
-                inL[static_cast<size_t> (i)] = decodePcm[static_cast<size_t> (i * 2)];
-                inR[static_cast<size_t> (i)] = decodePcm[static_cast<size_t> (i * 2 + 1)];
-            }
-            std::vector<float> outL (static_cast<size_t> (outSamples));
-            std::vector<float> outR (static_cast<size_t> (outSamples));
-            double ratio = 48000.0 / currentSampleRate;
-            recvResamplerL.process (ratio, inL.data(), outL.data(),
-                                   outSamples, frames, 0);
-            recvResamplerR.process (ratio, inR.data(), outR.data(),
-                                   outSamples, frames, 0);
-            std::vector<float> resampled (static_cast<size_t> (outSamples * 2));
-            for (int i = 0; i < outSamples; ++i)
-            {
-                resampled[static_cast<size_t> (i * 2)]     = outL[static_cast<size_t> (i)];
-                resampled[static_cast<size_t> (i * 2 + 1)] = outR[static_cast<size_t> (i)];
-            }
-            receiveBuffer.write (resampled.data(), outSamples * 2);
-            if (recorder->isRecording())
-                recorder->appendRemoteAudio (resampled.data(), outSamples);
-        }
-        else
-        {
-            receiveBuffer.write (decodePcm.data(), frames * 2);
-            if (recorder->isRecording())
-                recorder->appendRemoteAudio (decodePcm.data(), frames);
-        }
-    }
+    pushDecoded (frames);
+
+    lastDecodedSeq = seq;
+    haveLastSeq    = true;
 }
 
 void CollabSyncProcessor::onMidiPacketReceived (const uint8_t* data, size_t size, uint64_t /*sessionTimeNs*/)
@@ -410,6 +494,9 @@ void CollabSyncProcessor::onPeerConnected()
     // send thread (encoder) and UDP receive thread (decoder).
     encoderResetPending.store (true);
     decoderResetPending.store (true);
+    haveLastSeq          = false;
+    lastDecodedSeq       = 0;
+    consecutiveUnderruns = 0;
     clock->setSessionStart (SessionClock::localNow());
     juce::MessageManager::callAsync ([this]
     {

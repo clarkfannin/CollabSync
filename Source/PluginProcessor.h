@@ -1,6 +1,6 @@
 #pragma once
 
-#define COLLABSYNC_VERSION "0.6.0"
+#define COLLABSYNC_VERSION "0.7.0"
 
 #include <JuceHeader.h>
 #include "Network/PeerConnection.h"
@@ -115,6 +115,11 @@ private:
     std::vector<uint8_t> midiSendData;
     std::vector<uint8_t> midiRecvData;
 
+    // Lock-free queue: MIDI callback → processBlock → Recorder
+    // Keeps the MIDI callback non-blocking so CoreMIDI doesn't drop note-offs.
+    juce::AbstractFifo       midiRecordFifo  { 2048 };
+    std::vector<MidiPacket>  midiRecordQueue;
+
     // Core components
     std::unique_ptr<PeerConnection>   peer;
     std::unique_ptr<SignalingServer>  signalingServer;
@@ -161,6 +166,14 @@ private:
     std::vector<float> processBlockRemote;         // processBlock: receive remote audio
     std::vector<float> processBlockDiscard;        // processBlock: overflow/drain discard
     std::vector<float> decodePcm;                  // onAudioPacketReceived: decode output
+    std::vector<float> recvResampleInL, recvResampleInR;   // recv-thread resampler scratch
+    std::vector<float> recvResampleOutL, recvResampleOutR;
+    std::vector<float> recvResampleInterleaved;
+
+    // Sequence tracking on the receive side — drives PLC/FEC for missing frames
+    uint32_t lastDecodedSeq    = 0;
+    bool     haveLastSeq       = false;
+    int      consecutiveUnderruns = 0; // smaller bumps are just skipped, not re-primed
 
 public:
     // Diagnostics (public for editor access)
