@@ -33,8 +33,11 @@ CollabSyncProcessor::CollabSyncProcessor()
         }
     });
 
-    // Open all system MIDI inputs (CoreMIDI) — bypasses DAW routing
-    openMidiInputs();
+    // NOTE: MIDI inputs are opened in prepareToPlay(), not here. Opening system
+    // MIDI hardware from the constructor makes the plugin fail host validation
+    // scans (e.g. FL Studio on Windows silently rejects it), because the scanner
+    // constructs the plugin in a sandbox where grabbing all MIDI devices hangs or
+    // fails. Deferring to prepareToPlay means scanning never touches hardware.
 }
 
 CollabSyncProcessor::~CollabSyncProcessor()
@@ -86,6 +89,12 @@ void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     currentSampleRate = sampleRate;
     currentBlockSize  = samplesPerBlock;
+
+    // Open all system MIDI inputs here (not in the constructor) — bypasses DAW
+    // routing. Deferred out of the constructor so host validation scans, which
+    // construct the plugin without ever calling prepareToPlay, don't touch MIDI
+    // hardware and reject the plugin. Idempotent: openMidiInputs() closes first.
+    openMidiInputs();
 
     int capacitySamples = static_cast<int>(sampleRate * 1.0); // 1 second ring buffer
     sendBuffer    = SharedAudioBuffer (capacitySamples);
@@ -233,6 +242,11 @@ void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
 void CollabSyncProcessor::releaseResources()
 {
+    // Release system MIDI devices when the host stops the plugin (paired with the
+    // openMidiInputs() call in prepareToPlay). The destructor closes them too, as
+    // a backstop for hosts that destroy without calling releaseResources.
+    closeMidiInputs();
+
     sendThreadRunning.store (false);
     sendCv.notify_one();  // wake send thread so it can see the flag and exit
     if (audioSendThread.joinable())
