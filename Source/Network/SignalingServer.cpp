@@ -5,6 +5,12 @@
  #include <netinet/in.h>
  #include <arpa/inet.h>
  #include <sys/socket.h>
+#elif JUCE_WINDOWS
+ #include <winsock2.h>
+ #include <ws2tcpip.h>
+ #include <iphlpapi.h>
+ #pragma comment (lib, "ws2_32.lib")
+ #pragma comment (lib, "iphlpapi.lib")
 #endif
 
 SignalingServer::SignalingServer() : juce::Thread ("CollabSync Signaling") {}
@@ -245,6 +251,25 @@ juce::String SignalingServer::getRemoteIP (juce::StreamingSocket* sock)
     juce::String ip (buf);
     if (ip.startsWith ("::ffff:")) ip = ip.substring (7);
     return ip;
+#elif JUCE_WINDOWS
+    // JUCE's StreamingSocket returns the OS handle as an int; on Windows it is
+    // really a SOCKET. JUCE calls WSAStartup for us before any socket is used.
+    auto fd = (SOCKET) sock->getRawSocketHandle();
+    if (fd == INVALID_SOCKET) return {};
+
+    struct sockaddr_storage addr {};
+    int len = sizeof (addr);
+    if (getpeername (fd, (struct sockaddr*) &addr, &len) != 0) return {};
+
+    char buf[INET6_ADDRSTRLEN] = {};
+    if (addr.ss_family == AF_INET)
+        inet_ntop (AF_INET, &((struct sockaddr_in*) &addr)->sin_addr, buf, sizeof (buf));
+    else
+        inet_ntop (AF_INET6, &((struct sockaddr_in6*) &addr)->sin6_addr, buf, sizeof (buf));
+
+    juce::String ip (buf);
+    if (ip.startsWith ("::ffff:")) ip = ip.substring (7);
+    return ip;
 #else
     juce::ignoreUnused (sock);
     return {};
@@ -277,6 +302,43 @@ juce::String SignalingServer::detectTailscaleIP()
 
     freeifaddrs (ifap);
     return result;
+#elif JUCE_WINDOWS
+    // Enumerate adapters and find the one in Tailscale's CGNAT range (100.64.0.0/10).
+    ULONG bufLen = 15 * 1024; // recommended starting size per MSDN
+    std::vector<char> buffer (bufLen);
+    auto* addresses = reinterpret_cast<IP_ADAPTER_ADDRESSES*> (buffer.data());
+
+    ULONG ret = GetAdaptersAddresses (AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST
+                                              | GAA_FLAG_SKIP_DNS_SERVER,
+                                      nullptr, addresses, &bufLen);
+    if (ret == ERROR_BUFFER_OVERFLOW)
+    {
+        buffer.resize (bufLen);
+        addresses = reinterpret_cast<IP_ADAPTER_ADDRESSES*> (buffer.data());
+        ret = GetAdaptersAddresses (AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST
+                                            | GAA_FLAG_SKIP_DNS_SERVER,
+                                    nullptr, addresses, &bufLen);
+    }
+    if (ret != NO_ERROR) return {};
+
+    for (auto* ad = addresses; ad != nullptr; ad = ad->Next)
+    {
+        for (auto* ua = ad->FirstUnicastAddress; ua != nullptr; ua = ua->Next)
+        {
+            if (ua->Address.lpSockaddr->sa_family != AF_INET) continue;
+
+            auto*    sin  = reinterpret_cast<struct sockaddr_in*> (ua->Address.lpSockaddr);
+            uint32_t addr = ntohl (sin->sin_addr.s_addr);
+
+            if ((addr & 0xFFC00000u) == 0x64400000u)
+            {
+                char buf[INET_ADDRSTRLEN] = {};
+                inet_ntop (AF_INET, &sin->sin_addr, buf, sizeof (buf));
+                return juce::String (buf);
+            }
+        }
+    }
+    return {};
 #else
     return {};
 #endif

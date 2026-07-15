@@ -14,18 +14,31 @@ add_subdirectory(opus)
 # JUCE is bundled in the project folder
 add_subdirectory(JUCE)
 
+# Plugin formats and post-build install are platform-specific.
+# macOS: build VST3 + AU and copy into the system plugin folders.
+# Windows/Linux: build VST3 + Standalone; leave copying to CI/packaging.
+if(APPLE)
+    set(COLLABSYNC_FORMATS VST3 AU Standalone)
+    set(COLLABSYNC_COPY_AFTER_BUILD TRUE)
+else()
+    set(COLLABSYNC_FORMATS VST3 Standalone)
+    set(COLLABSYNC_COPY_AFTER_BUILD FALSE)
+endif()
+
 juce_add_plugin(CollabSync
     COMPANY_NAME "CollabSync"
     PLUGIN_MANUFACTURER_CODE Clbs
     PLUGIN_CODE Csyn
-    FORMATS VST3 AU Standalone
+    FORMATS ${COLLABSYNC_FORMATS}
     PRODUCT_NAME "CollabSync"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT TRUE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
-    COPY_PLUGIN_AFTER_BUILD TRUE
+    # Only auto-copy into system folders on macOS; the hardcoded /Library
+    # paths below are meaningless on other platforms.
+    COPY_PLUGIN_AFTER_BUILD ${COLLABSYNC_COPY_AFTER_BUILD}
     VST3_COPY_DIR "/Library/Audio/Plug-Ins/VST3"
     AU_COPY_DIR   "/Library/Audio/Plug-Ins/Components"
 )
@@ -65,6 +78,13 @@ target_link_libraries(CollabSync PRIVATE
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
 )
+
+# Windows networking: getpeername/inet_ntop live in ws2_32, GetAdaptersAddresses
+# in iphlpapi. Linked explicitly so non-MSVC toolchains (that ignore the
+# #pragma comment directives in SignalingServer.cpp) still link cleanly.
+if(WIN32)
+    target_link_libraries(CollabSync PRIVATE ws2_32 iphlpapi)
+endif()
 
 # Ad-hoc sign the plugin after build so DAWs can load it without Gatekeeper blocking
 if(APPLE)

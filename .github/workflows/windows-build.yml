@@ -1,0 +1,84 @@
+name: Windows Build
+
+# Builds the CollabSync Standalone app + VST3 for Windows and uploads them as a
+# downloadable artifact. JUCE is not committed to the repo (see .gitignore), so
+# we fetch the pinned version here. libopus is vendored under opus/ and builds
+# from source as part of the CMake configure.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: # lets you trigger a build by hand from the Actions tab
+
+env:
+  # Keep this in sync with the JUCE version the project expects.
+  JUCE_VERSION: "8.0.12"
+  BUILD_TYPE: Release
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # JUCE lives in ./JUCE but is gitignored, so restore it from cache or clone
+      # the pinned tag. The cache key includes the version so a bump busts it.
+      - name: Cache JUCE
+        id: cache-juce
+        uses: actions/cache@v4
+        with:
+          path: JUCE
+          key: juce-${{ env.JUCE_VERSION }}
+
+      - name: Fetch JUCE
+        if: steps.cache-juce.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --branch ${{ env.JUCE_VERSION }} https://github.com/juce-framework/JUCE.git JUCE
+
+      - name: Configure
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+          -Wno-dev
+
+      - name: Build
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+      # JUCE writes the plugin/app products under
+      # build/CollabSync_artefacts/<Config>/<Format>/. Collect the Standalone .exe
+      # and the VST3 into a flat staging folder for upload.
+      - name: Stage artifacts
+        shell: pwsh
+        run: |
+          $art = "build/CollabSync_artefacts/${{ env.BUILD_TYPE }}"
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+
+          $exe = Get-ChildItem -Path "$art/Standalone" -Filter *.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($exe) {
+            Copy-Item $exe.FullName -Destination staging/
+            Write-Host "Staged standalone: $($exe.Name)"
+          } else {
+            Write-Warning "No Standalone .exe found under $art/Standalone"
+          }
+
+          $vst3 = Get-ChildItem -Path "$art/VST3" -Filter *.vst3 -Directory -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($vst3) {
+            Copy-Item $vst3.FullName -Destination staging/ -Recurse
+            Write-Host "Staged VST3: $($vst3.Name)"
+          } else {
+            Write-Warning "No .vst3 found under $art/VST3"
+          }
+
+          Write-Host "--- staging contents ---"
+          Get-ChildItem -Recurse staging | Select-Object FullName
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CollabSync-Windows
+          path: staging/
+          if-no-files-found: error
