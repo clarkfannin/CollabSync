@@ -6,7 +6,6 @@ CollabSyncProcessor::CollabSyncProcessor()
         .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
         .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
-    signalingServer = std::make_unique<SignalingServer>();
     clock      = std::make_unique<SessionClock>();
     midiCapture = std::make_unique<MidiCapture>();
     jitterBuffer = std::make_unique<JitterBuffer> (20, 200); // 20ms target, 200ms max (WiFi headroom)
@@ -522,11 +521,11 @@ void CollabSyncProcessor::onPeerDisconnected()
 {
     peerConnected.store (false);
 
-    // If we're still hosting, rejoin the signaling server so we're ready
-    // for a new friend to connect without the host needing to do anything.
+    // If we're still hosting, rejoin the signaling room so we're ready for a
+    // new friend to connect without the host needing to do anything.
     // Guard: skip if we're already inside connect()/disconnect() to avoid infinite recursion.
-    if (! disconnecting && signalingServer->getState() == SignalingServer::State::Listening)
-        connect ("SYNC", "localhost");
+    if (! disconnecting && hosting.load())
+        connect ("SYNC", signalingHost);
 
     juce::MessageManager::callAsync ([this]
     {
@@ -547,9 +546,15 @@ void CollabSyncProcessor::onStatusChanged (const juce::String& status)
 void CollabSyncProcessor::connect (const juce::String& roomCode, const juce::String& host)
 {
     disconnect(); // always tear down cleanly before creating a new connection
-    if (host.isNotEmpty()) signalingHost = host;
+
+    // A ws(s):// value overrides the configured Worker URL (handy for testing
+    // against a local `wrangler dev`). Anything else is treated as leftover
+    // input and ignored — the room code alone pairs the peers now.
+    if (host.startsWithIgnoreCase ("ws://") || host.startsWithIgnoreCase ("wss://"))
+        signalingHost = host;
+
     peer = std::make_unique<PeerConnection> (this);
-    peer->connect (signalingHost + ":8765", roomCode);
+    peer->connect (signalingHost, roomCode);
 }
 
 void CollabSyncProcessor::disconnect()
@@ -654,43 +659,48 @@ juce::AudioProcessorEditor* CollabSyncProcessor::createEditor()
 //==============================================================================
 void CollabSyncProcessor::startSessionServer()
 {
-    signalingServer->start(); // blocks until listening (or error)
-    if (signalingServer->getState() != SignalingServer::State::Listening) return;
-
-    // Auto-connect the host to their own server with a fixed room code.
-    // The guest uses the same fixed code — no manual entry needed.
-    connect ("SYNC", "localhost");
+    // No local server to run any more: hosting means joining the Worker room
+    // first (which makes us the ICE controlling side). The guest joins the same
+    // room code. NOTE: the room code is currently fixed to "SYNC"; per-pair room
+    // codes arrive with the UI redesign so multiple pairs can share one Worker.
+    hosting.store (true);
+    connect ("SYNC", signalingHost);
 }
 
 void CollabSyncProcessor::stopSessionServer()
 {
-    signalingServer->stop(); // stop first so onPeerDisconnected doesn't auto-rejoin
+    hosting.store (false); // clear first so onPeerDisconnected doesn't auto-rejoin
     disconnect();
 }
 
 bool CollabSyncProcessor::isHostingSession() const
 {
-    return signalingServer->getState() == SignalingServer::State::Listening;
+    return hosting.load();
 }
 
 int CollabSyncProcessor::getSessionPeerCount() const
 {
-    return signalingServer->getJoinedCount();
+    // Remote peers currently in the session (0 or 1).
+    return peerConnected.load() ? 1 : 0;
 }
 
 juce::String CollabSyncProcessor::getSessionTailscaleIP() const
 {
-    return signalingServer->getTailscaleIP();
+    // Vestigial: the ICE model has no single per-peer IP to advertise. Kept for
+    // editor API compatibility until the redesigned UI drops the IP readout.
+    return {};
 }
 
 juce::String CollabSyncProcessor::getSessionErrorMessage() const
 {
-    return signalingServer->getErrorMessage();
+    return currentStatus.startsWith ("ERROR") ? currentStatus : juce::String();
 }
 
 juce::String CollabSyncProcessor::getLocalTailscaleIP() const
 {
-    return SignalingServer::detectTailscaleIP();
+    // Vestigial: peers pair by room code, not by IP. Returns empty so the old
+    // "your IP" readout is simply blank on this branch.
+    return {};
 }
 
 //==============================================================================

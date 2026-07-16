@@ -2,6 +2,12 @@
 #include "../Clock/SessionClock.h"
 #include <cstring>
 
+// Public STUN server used for server-reflexive candidate discovery (finding
+// each peer's public IP:port so the two NATs can be hole-punched). STUN is
+// stateless and free to use; no account or hosting required.
+static constexpr const char* kStunHost = "stun.l.google.com";
+static constexpr uint16_t    kStunPort = 19302;
+
 static constexpr uint8_t PKT_AUDIO     = 0x01;
 static constexpr uint8_t PKT_MIDI      = 0x02;
 static constexpr uint8_t PKT_COUNTDOWN = 0x03;
@@ -18,247 +24,320 @@ struct PacketHeader
 #pragma pack(pop)
 
 //==============================================================================
-// Background thread: reads from UDP socket and dispatches to listener
-class UdpReceiveThread : public juce::Thread
+// libjuice C callback trampolines — dispatch to the owning PeerConnection.
+void PeerConnection::cbState (juice_agent_t*, juice_state_t state, void* user)
 {
-public:
-    UdpReceiveThread (juce::DatagramSocket* sock, PeerConnection::Listener* listener)
-        : juce::Thread ("CollabSync UDP Recv"), socket (sock), listener (listener) {}
+    static_cast<PeerConnection*> (user)->onIceStateChanged ((int) state);
+}
 
-    void run() override
+void PeerConnection::cbCandidate (juice_agent_t*, const char* sdp, void* user)
+{
+    auto* self = static_cast<PeerConnection*> (user);
+    if (self->signaling)
+        self->signaling->sendCandidate (sdp);
+}
+
+void PeerConnection::cbGathering (juice_agent_t*, void* /*user*/)
+{
+    // Local gathering finished. We rely on ICE connectivity checks rather than
+    // an explicit end-of-candidates signal, so nothing to do here.
+}
+
+void PeerConnection::cbRecv (juice_agent_t*, const char* data, size_t size, void* user)
+{
+    static_cast<PeerConnection*> (user)->onDatagram (
+        reinterpret_cast<const uint8_t*> (data), size);
+}
+
+//==============================================================================
+PeerConnection::~PeerConnection() { disconnect(); }
+
+bool PeerConnection::connect (const juce::String& signalingServerUrl, const juce::String& roomCodeIn)
+{
+    if (! PeerCrypto::init())
     {
-        std::vector<uint8_t> buf (65536);
-        while (! threadShouldExit())
+        setStatus ("ERROR: crypto init failed");
+        return false;
+    }
+
+    roomCode = roomCodeIn.toUpperCase();
+    controlling.store (false);
+    iceConnected.store (false);
+    remoteDescSet.store (false);
+    announced.store (false);
+    connected.store (false);
+    audioSeq = midiSeq = 0;
+
+    signaling = std::make_unique<SignalingClient>();
+
+    SignalingClient::Callbacks cbs;
+    cbs.onRole              = [this] (bool isHost)
+    {
+        controlling.store (isHost);
+        setStatus (isHost ? "Hosting — waiting for peer…" : "Joining…");
+    };
+    cbs.onWaiting           = [this] { setStatus ("Waiting for peer…"); };
+    cbs.onPeerJoined        = [this] { startIce(); };
+    cbs.onPeerLeft          = [this]
+    {
+        setStatus ("Peer left");
+        connected.store (false);
+        listener->onPeerDisconnected();
+    };
+    cbs.onRemoteDescription = [this] (const std::string& sdp) { onRemoteDescription (sdp); };
+    cbs.onRemoteCandidate   = [this] (const std::string& c)   { onRemoteCandidate (c); };
+    cbs.onRemotePubkey      = [this] (const std::vector<uint8_t>& pk) { onRemotePubkey (pk); };
+    cbs.onError             = [this] (const std::string& r)   { setStatus ("Signaling error: " + juce::String (r)); };
+    cbs.onClosed            = [] { /* expected once the P2P link is up */ };
+
+    setStatus ("Connecting to signaling server…");
+    return signaling->connect (signalingServerUrl, roomCode, std::move (cbs));
+}
+
+void PeerConnection::startIce()
+{
+    std::lock_guard<std::mutex> lock (agentMutex);
+    if (agent != nullptr)
+        return; // already started
+
+    juice_config_t config;
+    std::memset (&config, 0, sizeof (config));
+    config.concurrency_mode  = JUICE_CONCURRENCY_MODE_THREAD;
+    config.stun_server_host  = kStunHost;
+    config.stun_server_port  = kStunPort;
+    config.cb_state_changed  = cbState;
+    config.cb_candidate      = cbCandidate;
+    config.cb_gathering_done = cbGathering;
+    config.cb_recv           = cbRecv;
+    config.user_ptr          = this;
+
+    agent = juice_create (&config);
+    if (agent == nullptr)
+    {
+        setStatus ("ERROR: could not create ICE agent");
+        return;
+    }
+
+    // Announce our encryption public key to the peer.
+    if (signaling)
+        signaling->sendPubkey (crypto.localPublicKey());
+
+    // Send our local ICE description; then gather candidates (which trickle out
+    // via cbCandidate).
+    char sdp[JUICE_MAX_SDP_STRING_LEN];
+    if (juice_get_local_description (agent, sdp, sizeof (sdp)) == 0 && signaling)
+        signaling->sendDescription (sdp);
+
+    juice_gather_candidates (agent);
+    setStatus ("Negotiating connection…");
+}
+
+void PeerConnection::onRemoteDescription (const std::string& sdp)
+{
+    std::lock_guard<std::mutex> lock (agentMutex);
+    if (agent == nullptr)
+        return;
+
+    if (juice_set_remote_description (agent, sdp.c_str()) == 0)
+    {
+        remoteDescSet.store (true);
+
+        // Flush any candidates that arrived before the remote description.
+        std::vector<std::string> pend;
         {
-            if (socket->waitUntilReady (true, 5) != 1) continue;
+            std::lock_guard<std::mutex> pl (pendingMutex);
+            pend.swap (pendingCandidates);
+        }
+        for (const auto& c : pend)
+            juice_add_remote_candidate (agent, c.c_str());
+    }
+}
 
-            juce::String senderHost;
-            int senderPort = 0;
-            int received = socket->read (buf.data(), (int) buf.size(), false,
-                                         senderHost, senderPort);
+void PeerConnection::onRemoteCandidate (const std::string& candidate)
+{
+    if (! remoteDescSet.load())
+    {
+        // Remote description not set yet — buffer until it is, or juice would
+        // reject the candidate.
+        std::lock_guard<std::mutex> pl (pendingMutex);
+        pendingCandidates.push_back (candidate);
+        return;
+    }
 
-            if (received < (int) sizeof (PacketHeader)) continue;
+    std::lock_guard<std::mutex> lock (agentMutex);
+    if (agent != nullptr)
+        juice_add_remote_candidate (agent, candidate.c_str());
+}
 
-            auto* hdr           = reinterpret_cast<const PacketHeader*> (buf.data());
-            const uint8_t* payload = buf.data() + sizeof (PacketHeader);
-            size_t payloadSize  = hdr->payloadSize;
+void PeerConnection::onRemotePubkey (const std::vector<uint8_t>& pk)
+{
+    // Key agreement needs only the peer's public key, our keypair, our role,
+    // and the shared room code — independent of ICE progress.
+    if (crypto.deriveSharedKeys (pk, controlling.load(), roomCode.toStdString()))
+        tryAnnounceConnected();
+    else
+        setStatus ("ERROR: key exchange failed");
+}
 
-            if (hdr->type == PKT_AUDIO)
-                listener->onAudioPacketReceived (payload, payloadSize, hdr->sessionTimeNs);
-            else if (hdr->type == PKT_MIDI)
-                listener->onMidiPacketReceived  (payload, payloadSize, hdr->sessionTimeNs);
-            else if (hdr->type == PKT_COUNTDOWN && payloadSize >= 4)
+void PeerConnection::onIceStateChanged (int state)
+{
+    switch (state)
+    {
+        case JUICE_STATE_GATHERING:
+            setStatus ("Gathering candidates…");
+            break;
+        case JUICE_STATE_CONNECTING:
+            setStatus ("Punching through NAT…");
+            break;
+        case JUICE_STATE_CONNECTED:
+        case JUICE_STATE_COMPLETED:
+            iceConnected.store (true);
+            tryAnnounceConnected();
+            if (state == JUICE_STATE_COMPLETED && signaling)
+                signaling->close(); // P2P path fixed — signaling no longer needed
+            break;
+        case JUICE_STATE_FAILED:
+            setStatus ("Connection failed (could not reach peer)");
+            connected.store (false);
+            listener->onPeerDisconnected();
+            break;
+        case JUICE_STATE_DISCONNECTED:
+        default:
+            break;
+    }
+}
+
+void PeerConnection::tryAnnounceConnected()
+{
+    // Announce a live session only once both the ICE path and the encryption
+    // keys are ready.
+    bool expected = false;
+    if (iceConnected.load() && crypto.isReady()
+        && announced.compare_exchange_strong (expected, true))
+    {
+        connected.store (true);
+        setStatus ("Connected");
+        listener->onPeerConnected();
+    }
+}
+
+void PeerConnection::onDatagram (const uint8_t* data, size_t size)
+{
+    std::vector<uint8_t> plain;
+    if (! crypto.decrypt (data, size, plain))
+        return; // not yet keyed, or authentication failed — drop
+
+    if (plain.size() < sizeof (PacketHeader))
+        return;
+
+    auto* hdr                = reinterpret_cast<const PacketHeader*> (plain.data());
+    const uint8_t* payload   = plain.data() + sizeof (PacketHeader);
+    const size_t payloadSize = juce::jmin ((size_t) hdr->payloadSize,
+                                           plain.size() - sizeof (PacketHeader));
+
+    switch (hdr->type)
+    {
+        case PKT_AUDIO:
+            listener->onAudioPacketReceived (payload, payloadSize, hdr->sessionTimeNs);
+            break;
+        case PKT_MIDI:
+            listener->onMidiPacketReceived (payload, payloadSize, hdr->sessionTimeNs);
+            break;
+        case PKT_COUNTDOWN:
+            if (payloadSize >= 4)
             {
                 float bpm = 0.0f;
                 std::memcpy (&bpm, payload, 4);
                 listener->onCountdownReceived (bpm);
             }
-            else if (hdr->type == PKT_STOP)
-                listener->onStopReceived();
-        }
+            break;
+        case PKT_STOP:
+            listener->onStopReceived();
+            break;
+        default:
+            break;
     }
-
-private:
-    juce::DatagramSocket* socket;
-    PeerConnection::Listener* listener;
-};
-
-//==============================================================================
-// Background thread: connects to signaling server, waits for peer info
-class SignalingThread : public juce::Thread
-{
-public:
-    SignalingThread (const juce::String& host, int port,
-                     const juce::String& room, int myUdpPort,
-                     std::function<void(juce::String, int)> onPeer,
-                     std::function<void(juce::String)>      onStatus)
-        : juce::Thread ("CollabSync Signaling")
-        , sigHost (host), sigPort (port), room (room), myUdpPort (myUdpPort)
-        , onPeer (std::move (onPeer)), onStatus (std::move (onStatus)) {}
-
-    void run() override
-    {
-        juce::StreamingSocket sock;
-
-        onStatus ("Connecting to signaling server...");
-
-        if (! sock.connect (sigHost, sigPort, 5000))
-        {
-            onStatus ("ERROR: Cannot reach signaling server");
-            return;
-        }
-
-        // Send JOIN message
-        juce::String joinMsg = "JOIN " + room + " " + juce::String (myUdpPort) + "\n";
-        sock.write (joinMsg.toRawUTF8(), (int) joinMsg.getNumBytesAsUTF8());
-
-        onStatus ("Waiting for peer...");
-
-        // Read lines from server
-        juce::String lineBuffer;
-        while (! threadShouldExit())
-        {
-            if (sock.waitUntilReady (true, 100) != 1) continue;
-
-            char ch = 0;
-            if (sock.read (&ch, 1, false) <= 0) break;
-
-            if (ch == '\n')
-            {
-                juce::String line = lineBuffer.trim();
-                lineBuffer.clear();
-
-                if (line.startsWith ("PEER "))
-                {
-                    // PEER <ip> <port>
-                    juce::StringArray parts = juce::StringArray::fromTokens (line, " ", "");
-                    if (parts.size() >= 3)
-                    {
-                        juce::String peerIp   = parts[1];
-                        int          peerPort = parts[2].getIntValue();
-                        onPeer (peerIp, peerPort);
-                    }
-                    return; // done — peer found
-                }
-                else if (line.startsWith ("WAIT"))
-                {
-                    onStatus ("Waiting for peer to join room...");
-                }
-                else if (line.startsWith ("ERROR"))
-                {
-                    onStatus ("ERROR: " + line.fromFirstOccurrenceOf (" ", false, false));
-                    return;
-                }
-            }
-            else
-            {
-                lineBuffer += ch;
-            }
-        }
-    }
-
-private:
-    juce::String sigHost;
-    int          sigPort;
-    juce::String room;
-    int          myUdpPort;
-    std::function<void(juce::String, int)> onPeer;
-    std::function<void(juce::String)>      onStatus;
-};
-
-PeerConnection::~PeerConnection() { disconnect(); }
-
-//==============================================================================
-bool PeerConnection::connect (const juce::String& signalingServerUrl, const juce::String& roomCode)
-{
-    // Pick a random local UDP port in range 40000–49000
-    localUdpPort = 40000 + (std::abs (roomCode.hashCode()) % 9000);
-
-    udpSocket = std::make_unique<juce::DatagramSocket>();
-    // Try binding; if port taken increment until we find one free
-    while (! udpSocket->bindToPort (localUdpPort))
-    {
-        ++localUdpPort;
-        if (localUdpPort > 49999) { udpSocket.reset(); return false; }
-    }
-
-    // Parse signaling server URL: "host:port" or just "host" (default port 8765)
-    juce::String sigHost = signalingServerUrl;
-    int          sigPort = 8765;
-    if (signalingServerUrl.contains (":"))
-    {
-        sigHost = signalingServerUrl.upToLastOccurrenceOf (":", false, false);
-        sigPort = signalingServerUrl.fromLastOccurrenceOf (":", false, false).getIntValue();
-    }
-
-    signalingThread = std::make_unique<SignalingThread> (
-        sigHost, sigPort, roomCode, localUdpPort,
-        [this] (juce::String peerIp, int peerPort)      // onPeer
-        {
-            this->peerHost = peerIp;
-            this->peerPort = peerPort;
-
-            // Start UDP receive thread now we know who to expect
-            receiveThread = std::make_unique<UdpReceiveThread> (udpSocket.get(), listener);
-            receiveThread->startThread (juce::Thread::Priority::high);
-
-            connected.store (true);
-            listener->onPeerConnected();
-        },
-        [this] (juce::String status)                    // onStatus
-        {
-            lastStatus = status;
-            juce::MessageManager::callAsync ([this, status] {
-                listener->onStatusChanged (status);
-            });
-        }
-    );
-    signalingThread->startThread();
-    return true;
 }
 
 void PeerConnection::disconnect()
 {
     connected.store (false);
 
-    if (signalingThread) { signalingThread->stopThread (1000); signalingThread.reset(); }
-    if (receiveThread)   { receiveThread->stopThread   (1000); receiveThread.reset(); }
-    udpSocket.reset();
+    if (signaling)
+    {
+        signaling->close();
+        signaling.reset();
+    }
 
-    listener->onPeerDisconnected();
+    {
+        std::lock_guard<std::mutex> lock (agentMutex);
+        if (agent != nullptr)
+        {
+            juice_destroy (agent);
+            agent = nullptr;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> pl (pendingMutex);
+        pendingCandidates.clear();
+    }
+
+    if (listener)
+        listener->onPeerDisconnected();
+}
+
+//==============================================================================
+bool PeerConnection::sendFramed (uint8_t type, const uint8_t* data, size_t size, uint32_t seq)
+{
+    if (! connected.load() || ! crypto.isReady())
+        return false;
+
+    std::vector<uint8_t> framed (sizeof (PacketHeader) + size);
+    auto* hdr          = reinterpret_cast<PacketHeader*> (framed.data());
+    hdr->type          = type;
+    hdr->sequence      = seq;
+    hdr->sessionTimeNs = SessionClock::localNow();
+    hdr->payloadSize   = (uint16_t) size;
+    if (size > 0)
+        std::memcpy (framed.data() + sizeof (PacketHeader), data, size);
+
+    const std::vector<uint8_t> enc = crypto.encrypt (framed.data(), framed.size());
+    if (enc.empty())
+        return false;
+
+    std::lock_guard<std::mutex> lock (agentMutex);
+    if (agent == nullptr)
+        return false;
+    return juice_send (agent, reinterpret_cast<const char*> (enc.data()), enc.size()) >= 0;
 }
 
 bool PeerConnection::sendAudio (const uint8_t* data, size_t size)
 {
-    if (! connected.load() || ! udpSocket || peerHost.isEmpty()) return false;
-
-    std::vector<uint8_t> pkt (sizeof (PacketHeader) + size);
-    auto* hdr           = reinterpret_cast<PacketHeader*> (pkt.data());
-    hdr->type           = PKT_AUDIO;
-    hdr->sequence       = ++audioSeq;
-    hdr->sessionTimeNs  = SessionClock::localNow();
-    hdr->payloadSize    = (uint16_t) size;
-    std::memcpy (pkt.data() + sizeof (PacketHeader), data, size);
-
-    return udpSocket->write (peerHost, peerPort, pkt.data(), (int) pkt.size()) > 0;
-}
-
-bool PeerConnection::sendCountdown (float bpm)
-{
-    if (! connected.load() || ! udpSocket || peerHost.isEmpty()) return false;
-    std::vector<uint8_t> pkt (sizeof (PacketHeader) + 4);
-    auto* hdr          = reinterpret_cast<PacketHeader*> (pkt.data());
-    hdr->type          = PKT_COUNTDOWN;
-    hdr->sequence      = 0;
-    hdr->sessionTimeNs = SessionClock::localNow();
-    hdr->payloadSize   = 4;
-    std::memcpy (pkt.data() + sizeof (PacketHeader), &bpm, 4);
-    return udpSocket->write (peerHost, peerPort, pkt.data(), (int) pkt.size()) > 0;
-}
-
-bool PeerConnection::sendStop()
-{
-    if (! connected.load() || ! udpSocket || peerHost.isEmpty()) return false;
-    std::vector<uint8_t> pkt (sizeof (PacketHeader));
-    auto* hdr          = reinterpret_cast<PacketHeader*> (pkt.data());
-    hdr->type          = PKT_STOP;
-    hdr->sequence      = 0;
-    hdr->sessionTimeNs = SessionClock::localNow();
-    hdr->payloadSize   = 0;
-    return udpSocket->write (peerHost, peerPort, pkt.data(), (int) pkt.size()) > 0;
+    return sendFramed (PKT_AUDIO, data, size, ++audioSeq);
 }
 
 bool PeerConnection::sendMidi (const uint8_t* data, size_t size)
 {
-    if (! connected.load() || ! udpSocket || peerHost.isEmpty()) return false;
+    return sendFramed (PKT_MIDI, data, size, ++midiSeq);
+}
 
-    std::vector<uint8_t> pkt (sizeof (PacketHeader) + size);
-    auto* hdr           = reinterpret_cast<PacketHeader*> (pkt.data());
-    hdr->type           = PKT_MIDI;
-    hdr->sequence       = ++midiSeq;
-    hdr->sessionTimeNs  = SessionClock::localNow();
-    hdr->payloadSize    = (uint16_t) size;
-    std::memcpy (pkt.data() + sizeof (PacketHeader), data, size);
+bool PeerConnection::sendCountdown (float bpm)
+{
+    return sendFramed (PKT_COUNTDOWN, reinterpret_cast<const uint8_t*> (&bpm), 4, 0);
+}
 
-    return udpSocket->write (peerHost, peerPort, pkt.data(), (int) pkt.size()) > 0;
+bool PeerConnection::sendStop()
+{
+    return sendFramed (PKT_STOP, nullptr, 0, 0);
+}
+
+void PeerConnection::setStatus (const juce::String& s)
+{
+    lastStatus = s;
+    juce::MessageManager::callAsync ([this, s]
+    {
+        if (listener)
+            listener->onStatusChanged (s);
+    });
 }

@@ -2,9 +2,15 @@
 
 #define COLLABSYNC_VERSION "0.7.0"
 
+// Default Cloudflare Worker signaling endpoint (up to and including "/rtc").
+// Override at build time with -DCOLLABSYNC_SIGNALING_URL="wss://.../rtc", or
+// type a ws(s):// URL into the plugin's host field to override at runtime.
+#ifndef COLLABSYNC_SIGNALING_URL
+ #define COLLABSYNC_SIGNALING_URL "wss://collabsync-signaling.example.workers.dev/rtc"
+#endif
+
 #include <JuceHeader.h>
 #include "Network/PeerConnection.h"
-#include "Network/SignalingServer.h"
 #include "Audio/OpusCodec.h"
 #include "Audio/JitterBuffer.h"
 #include "Audio/SharedAudioBuffer.h"
@@ -53,21 +59,26 @@ public:
     void onPeerDisconnected() override;
     void onStatusChanged (const juce::String& status) override;
 
-    // Session control (called from editor)
+    // Session control (called from editor). `host` is the signaling endpoint:
+    // if it is a ws(s):// URL it overrides the configured Worker URL; otherwise
+    // the configured Worker URL is used. Both peers share the same roomCode.
     void connect       (const juce::String& roomCode, const juce::String& host);
-    juce::String signalingHost { "localhost" };
+    juce::String signalingHost { COLLABSYNC_SIGNALING_URL };
     void disconnect    ();
     void triggerRecord (); // sends countdown to both peers, then starts recording
     void triggerStop   (); // stops recording on both peers
 
-    // Session hosting (built-in signaling server)
+    // Session hosting. With the Cloudflare Worker model there is no local server
+    // to run — "hosting" simply means we joined the room first (ICE controlling
+    // side). These keep the previous editor's API; some values are vestigial in
+    // the new model (see PluginProcessor.cpp) pending the UI redesign merge.
     void startSessionServer();
     void stopSessionServer();
     bool isHostingSession()    const;
     int  getSessionPeerCount() const;
-    juce::String getSessionTailscaleIP()  const;
+    juce::String getSessionTailscaleIP()  const; // vestigial: no per-peer IP in the ICE model
     juce::String getSessionErrorMessage() const;
-    juce::String getLocalTailscaleIP()    const; // works even when server is not running
+    juce::String getLocalTailscaleIP()    const; // vestigial: room code replaces IP sharing
 
     // PeerConnection::Listener — countdown/stop
     void onCountdownReceived (float bpm) override;
@@ -122,7 +133,7 @@ private:
 
     // Core components
     std::unique_ptr<PeerConnection>   peer;
-    std::unique_ptr<SignalingServer>  signalingServer;
+    std::atomic<bool>                 hosting { false }; // we initiated the room (ICE controlling)
     std::unique_ptr<OpusEncoder>    encoder;
     std::unique_ptr<OpusDecoder>    decoder;
     std::unique_ptr<JitterBuffer>   jitterBuffer;

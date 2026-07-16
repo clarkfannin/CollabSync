@@ -14,6 +14,69 @@ add_subdirectory(opus)
 # JUCE is bundled in the project folder
 add_subdirectory(JUCE)
 
+#==============================================================================
+# Peer-to-peer networking dependencies (replaces the Tailscale + Node model).
+#
+#   libjuice     - ICE / STUN: NAT traversal + UDP hole punching between peers.
+#   libsodium    - Noise-style key exchange + per-packet authenticated encryption.
+#   IXWebSocket  - WSS client used to reach the Cloudflare Worker signaling server.
+#                  TLS backend: Apple SecureTransport on macOS (native, no extra
+#                  dependency); mbedTLS elsewhere (e.g. the Windows CI build).
+#
+# All fetched and built statically so the plugin stays self-contained.
+#==============================================================================
+include(FetchContent)
+set(FETCHCONTENT_QUIET OFF)
+
+# --- libjuice (ICE / STUN hole punching) ------------------------------------
+set(NO_TESTS   ON  CACHE BOOL "" FORCE)
+set(NO_EXAMPLES ON CACHE BOOL "" FORCE)
+FetchContent_Declare(libjuice
+    GIT_REPOSITORY https://github.com/paullouisageneau/libjuice.git
+    GIT_TAG        v1.5.9
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(libjuice)
+
+# --- libsodium (encryption) -------------------------------------------------
+# Upstream libsodium is autotools-only; this maintained wrapper exposes a
+# CMake `sodium` static target.
+set(SODIUM_DISABLE_TESTS ON CACHE BOOL "" FORCE)
+FetchContent_Declare(sodium
+    GIT_REPOSITORY https://github.com/robinlinden/libsodium-cmake.git
+    GIT_TAG        9b2848dfc1b917a9410f0de9d81059b26cbfaa8d
+)
+FetchContent_MakeAvailable(sodium)
+
+# --- IXWebSocket (WSS signaling client) -------------------------------------
+set(USE_TLS ON CACHE BOOL "" FORCE)
+if(APPLE)
+    # Native TLS: no third-party TLS library needed on macOS.
+    set(USE_SECURE_TRANSPORT ON CACHE BOOL "" FORCE)
+else()
+    # mbedTLS for cross-platform builds (Windows CI, Linux).
+    set(ENABLE_TESTING  OFF CACHE BOOL "" FORCE)
+    set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(mbedtls
+        GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
+        GIT_TAG        v3.6.2
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(mbedtls)
+    set(USE_MBED_TLS ON CACHE BOOL "" FORCE)
+    # Point IXWebSocket's TLS lookup at the targets we just built.
+    set(MBEDTLS_INCLUDE_DIRS "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+    set(MBEDTLS_LIBRARY    mbedtls    CACHE STRING "" FORCE)
+    set(MBEDX509_LIBRARY   mbedx509   CACHE STRING "" FORCE)
+    set(MBEDCRYPTO_LIBRARY mbedcrypto CACHE STRING "" FORCE)
+endif()
+FetchContent_Declare(ixwebsocket
+    GIT_REPOSITORY https://github.com/machinezone/IXWebSocket.git
+    GIT_TAG        v11.4.5
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(ixwebsocket)
+
 # Plugin formats and post-build install are platform-specific.
 # macOS: build VST3 + AU and copy into the system plugin folders.
 # Windows/Linux: build VST3 + Standalone; leave copying to CI/packaging.
@@ -49,8 +112,8 @@ target_sources(CollabSync PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/Network/SignalingClient.cpp
-    Source/Network/SignalingServer.cpp
     Source/Network/PeerConnection.cpp
+    Source/Network/PeerCrypto.cpp
     Source/Audio/OpusCodec.cpp
     Source/Audio/JitterBuffer.cpp
     Source/Audio/SharedAudioBuffer.cpp
@@ -73,6 +136,9 @@ target_link_libraries(CollabSync PRIVATE
     juce::juce_gui_basics
     juce::juce_core
     opus
+    LibJuice::LibJuiceStatic
+    sodium
+    ixwebsocket
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
