@@ -92,5 +92,10 @@ private:
 
     juce::String lastStatus;
 
+    // Cleared in the destructor; see the matching flag on CollabSyncProcessor.
+    // Work deferred off the libjuice callback thread captures a copy so it can
+    // bail out if we are destroyed before it runs.
+    std::shared_ptr<std::atomic<bool>> alive { std::make_shared<std::atomic<bool>> (true) };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PeerConnection)
 };

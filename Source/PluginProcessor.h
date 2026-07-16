@@ -159,7 +159,12 @@ private:
     std::atomic<bool> peerConnected       { false };
     std::atomic<bool> recording           { false };
     std::atomic<int>  countdownBeat       { 0 };   // 4,3,2,1 then 0 = recording
-    bool              disconnecting       { false }; // re-entrancy guard for connect/disconnect
+    std::atomic<bool> disconnecting       { false }; // re-entrancy guard for connect/disconnect
+
+    // Cleared in the destructor. Deferred work posted from network callback
+    // threads captures a copy and bails out if the processor is already gone,
+    // since a queued lambda can outlive us.
+    std::shared_ptr<std::atomic<bool>> alive { std::make_shared<std::atomic<bool>> (true) };
     std::atomic<bool> encoderResetPending { false }; // set by onPeerConnected, consumed by send thread
     std::atomic<bool> decoderResetPending { false }; // set by onPeerConnected, consumed by recv thread
 

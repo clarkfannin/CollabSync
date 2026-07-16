@@ -50,7 +50,11 @@ void PeerConnection::cbRecv (juice_agent_t*, const char* data, size_t size, void
 }
 
 //==============================================================================
-PeerConnection::~PeerConnection() { disconnect(); }
+PeerConnection::~PeerConnection()
+{
+    alive->store (false); // neutralise any deferred work still queued
+    disconnect();
+}
 
 bool PeerConnection::connect (const juce::String& signalingServerUrl, const juce::String& roomCodeIn)
 {
@@ -193,8 +197,18 @@ void PeerConnection::onIceStateChanged (int state)
         case JUICE_STATE_COMPLETED:
             iceConnected.store (true);
             tryAnnounceConnected();
+            // P2P path fixed — signaling no longer needed. We are on the libjuice
+            // agent thread here, and close() joins the WebSocket thread, which may
+            // itself be waiting on us: that pair deadlocks. Defer so every close
+            // runs on the message thread, one at a time.
             if (state == JUICE_STATE_COMPLETED && signaling)
-                signaling->close(); // P2P path fixed — signaling no longer needed
+            {
+                juce::MessageManager::callAsync ([this, alive = alive]
+                {
+                    if (alive->load() && signaling)
+                        signaling->close();
+                });
+            }
             break;
         case JUICE_STATE_FAILED:
             setStatus ("Connection failed (could not reach peer)");

@@ -41,6 +41,11 @@ CollabSyncProcessor::CollabSyncProcessor()
 
 CollabSyncProcessor::~CollabSyncProcessor()
 {
+    // Before anything else: stop deferred work from touching a half-dead object.
+    // disconnect() below reaches onPeerDisconnected(), which posts to the message
+    // thread; that lambda must become a no-op rather than fire after we are gone.
+    alive->store (false);
+
     // Backstop for hosts that destroy without calling releaseResources first
     // (auval does exactly this): the thread must be joined before its member
     // destructor runs, or std::thread's destructor calls std::terminate.
@@ -549,9 +554,25 @@ void CollabSyncProcessor::onPeerDisconnected()
 
     // If we're still hosting, rejoin the signaling room so we're ready for a
     // new friend to connect without the host needing to do anything.
-    // Guard: skip if we're already inside connect()/disconnect() to avoid infinite recursion.
-    if (! disconnecting && hosting.load())
-        connect ("SYNC", signalingHost);
+    //
+    // This runs on a network callback thread: the signaling WebSocket's own
+    // thread for "peer left", or the libjuice agent thread for ICE failure.
+    // Rebuilding the connection here would tear down the very thread we are
+    // running on -- ix::WebSocket::stop() joins its own thread, which throws
+    // system_error and terminates the host. Defer to the message thread so
+    // teardown never runs on a thread it is about to destroy, and so all
+    // connect/disconnect work is serialised onto one thread.
+    if (! disconnecting.load() && hosting.load())
+    {
+        juce::MessageManager::callAsync ([this, alive = alive]
+        {
+            if (! alive->load())
+                return;
+            // Re-check: state may have changed between posting and running.
+            if (! disconnecting.load() && hosting.load())
+                connect ("SYNC", signalingHost);
+        });
+    }
 
     juce::MessageManager::callAsync ([this]
     {
