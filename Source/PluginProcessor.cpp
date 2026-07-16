@@ -41,6 +41,10 @@ CollabSyncProcessor::CollabSyncProcessor()
 
 CollabSyncProcessor::~CollabSyncProcessor()
 {
+    // Backstop for hosts that destroy without calling releaseResources first
+    // (auval does exactly this): the thread must be joined before its member
+    // destructor runs, or std::thread's destructor calls std::terminate.
+    stopSendThread();
     closeMidiInputs();
     if (peer) peer->disconnect();
 }
@@ -60,6 +64,18 @@ void CollabSyncProcessor::openMidiInputs()
             midiInputDevices.push_back (std::move (input));
         }
     }
+}
+
+// Stop and join the audio send thread. Idempotent, and safe to call when the
+// thread was never started. Destroying or move-assigning onto a still-joinable
+// std::thread calls std::terminate, so every path that ends the thread's life --
+// re-prepare, release, and destruction -- must come through here.
+void CollabSyncProcessor::stopSendThread()
+{
+    sendThreadRunning.store (false);
+    sendCv.notify_one();  // wake send thread so it can see the flag and exit
+    if (audioSendThread.joinable())
+        audioSendThread.join();
 }
 
 void CollabSyncProcessor::closeMidiInputs()
@@ -159,6 +175,11 @@ void CollabSyncProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     // Audio send thread: drains sendBuffer, encodes, sends.
     // Uses a condition variable instead of spin-wait so the OS can schedule
     // precisely instead of coalescing our microsecond sleeps.
+    // Hosts may call prepareToPlay twice with no releaseResources between (auval
+    // does this when timing COLD vs WARM opens), so retire any previous thread
+    // before assigning over it.
+    stopSendThread();
+
     sendThreadRunning.store (true);
     audioSendThread = std::thread ([this]
     {
@@ -246,10 +267,7 @@ void CollabSyncProcessor::releaseResources()
     // a backstop for hosts that destroy without calling releaseResources.
     closeMidiInputs();
 
-    sendThreadRunning.store (false);
-    sendCv.notify_one();  // wake send thread so it can see the flag and exit
-    if (audioSendThread.joinable())
-        audioSendThread.join();
+    stopSendThread();
     encoder.reset();
     decoder.reset();
 }

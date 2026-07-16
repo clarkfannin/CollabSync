@@ -91,6 +91,7 @@ public:
     // Direct MIDI device management
     void openMidiInputs();
     void closeMidiInputs();
+    void stopSendThread();
     bool hasDirectMidiInputs() const { return ! midiInputDevices.empty(); }
 
     // State queries
