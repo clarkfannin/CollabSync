@@ -6,7 +6,7 @@
 // Override at build time with -DCOLLABSYNC_SIGNALING_URL="wss://.../rtc", or
 // type a ws(s):// URL into the plugin's host field to override at runtime.
 #ifndef COLLABSYNC_SIGNALING_URL
- #define COLLABSYNC_SIGNALING_URL "wss://collabsync-signaling.example.workers.dev/rtc"
+ #define COLLABSYNC_SIGNALING_URL "wss://collabsync-signaling.jclarkfii.workers.dev/rtc"
 #endif
 
 #include <JuceHeader.h>
