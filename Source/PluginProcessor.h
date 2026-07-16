@@ -110,6 +110,10 @@ public:
     juce::String currentStatus;
     juce::File   lastSessionDir;
 
+    // UI-only additive getter (for the redesigned editor's "Audio" activity indicator).
+    // Not part of the networking/processing API — see processBlock() for the writer side.
+    float getInputAudioLevel() const { return inputAudioLevel.load (std::memory_order_relaxed); }
+
 private:
     void sendAudioLoop();   // background thread body
     void sendMidiLoop();
@@ -194,6 +198,7 @@ public:
     std::atomic<uint32_t> bufferUnderruns   { 0 };
     std::atomic<int>      recvBufferLevel   { 0 };  // current fill in floats
     std::atomic<bool>     midiNoteState[128] {};  // per-note held tracking (lock-free)
+    std::atomic<float>    inputAudioLevel   { 0.0f }; // decaying peak of local input (UI-only, see getInputAudioLevel())
 private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CollabSyncProcessor)

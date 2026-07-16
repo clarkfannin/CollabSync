@@ -108,9 +108,25 @@ juce_add_plugin(CollabSync
 
 juce_generate_juce_header(CollabSync)
 
+# Bundled DM Sans / DM Mono fonts (OFL-licensed, see Assets/Fonts/*-LICENSE.txt)
+# for the redesigned UI — embedded as binary data so nothing is fetched at
+# runtime. Loaded via juce::Typeface::createSystemTypefaceFor in
+# Source/UI/CollabSyncLookAndFeel.cpp.
+juce_add_binary_data(CollabSyncFonts SOURCES
+    Assets/Fonts/DMSans-Regular.ttf
+    Assets/Fonts/DMSans-Medium.ttf
+    Assets/Fonts/DMSans-SemiBold.ttf
+    Assets/Fonts/DMSans-Bold.ttf
+    Assets/Fonts/DMMono-Regular.ttf
+    Assets/Fonts/DMMono-Medium.ttf
+)
+
 target_sources(CollabSync PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
+    Source/UI/CollabSyncLookAndFeel.cpp
+    Source/UI/CollabSyncComponents.cpp
+    Source/UI/GeneratedFileCard.cpp
     Source/Network/SignalingClient.cpp
     Source/Network/PeerConnection.cpp
     Source/Network/PeerCrypto.cpp
@@ -139,6 +155,7 @@ target_link_libraries(CollabSync PRIVATE
     LibJuice::LibJuiceStatic
     sodium
     ixwebsocket
+    CollabSyncFonts
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags

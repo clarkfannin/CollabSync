@@ -1,139 +1,19 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "UI/CollabSyncLookAndFeel.h"
+#include "UI/CollabSyncComponents.h"
+#include "UI/GeneratedFileCard.h"
 
 //==============================================================================
-// Draggable file tile for MIDI session export (text-only)
-class FileTile : public juce::Component
-{
-public:
-    FileTile (const juce::File& f, const juce::String& label)
-        : file (f), labelText (label) {}
-
-    void paint (juce::Graphics& g) override
-    {
-        auto b = getLocalBounds().toFloat();
-        g.setColour (isMouseOver() ? juce::Colour (0xff1e2e48) : juce::Colour (0xff161e30));
-        g.fillRoundedRectangle (b, 4.0f);
-        g.setColour (juce::Colour (0xff2a3a56));
-        g.drawRoundedRectangle (b.reduced (0.5f), 4.0f, 1.0f);
-
-        g.setColour (juce::Colour (0xffb0b8cc));
-        g.setFont (juce::FontOptions (11.0f));
-        g.drawText (labelText, 10, 0, getWidth() - 24, getHeight(),
-                    juce::Justification::centredLeft, true);
-
-        g.setColour (juce::Colour (0xff4a6a9a));
-        g.setFont (juce::FontOptions (10.0f));
-        g.drawText ("drag", getWidth() - 32, 0, 28, getHeight(),
-                    juce::Justification::centredRight, false);
-    }
-
-    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
-    void mouseExit  (const juce::MouseEvent&) override { repaint(); }
-    void mouseDrag  (const juce::MouseEvent&) override
-    {
-        if (file.existsAsFile())
-            juce::DragAndDropContainer::performExternalDragDropOfFiles (
-                { file.getFullPathName() }, false, this);
-    }
-
-private:
-    juce::File   file;
-    juce::String labelText;
-};
-
-//==============================================================================
-// Draggable waveform tile for WAV session export
-class WaveformTile : public juce::Component
-{
-public:
-    WaveformTile (const juce::File& f, const juce::String& label)
-        : file (f), labelText (label) { loadPeaks(); }
-
-    void paint (juce::Graphics& g) override
-    {
-        auto b = getLocalBounds().toFloat();
-        g.setColour (isMouseOver() ? juce::Colour (0xff1e2e48) : juce::Colour (0xff161e30));
-        g.fillRoundedRectangle (b, 4.0f);
-        g.setColour (juce::Colour (0xff2a3a56));
-        g.drawRoundedRectangle (b.reduced (0.5f), 4.0f, 1.0f);
-
-        if (! peaks.empty())
-        {
-            float waveH = b.getHeight() - 16.0f;
-            float midY  = 2.0f + waveH / 2.0f;
-            float barW  = (b.getWidth() - 8.0f) / (float) peaks.size();
-
-            g.setColour (juce::Colour (0xff5b8dee).withAlpha (0.6f));
-            for (int i = 0; i < (int) peaks.size(); ++i)
-            {
-                float x = 4.0f + (float) i * barW;
-                float h = peaks[(size_t) i] * waveH / 2.0f;
-                if (h < 0.5f) h = 0.5f;
-                g.fillRect (x, midY - h, std::max (1.0f, barW - 0.5f), h * 2.0f);
-            }
-        }
-
-        // Label at bottom
-        g.setColour (juce::Colour (0xffb0b8cc));
-        g.setFont (juce::FontOptions (9.5f));
-        g.drawText (labelText, 6, (int) b.getHeight() - 14, getWidth() - 36, 14,
-                    juce::Justification::centredLeft, true);
-
-        g.setColour (juce::Colour (0xff4a6a9a));
-        g.setFont (juce::FontOptions (9.0f));
-        g.drawText ("drag", getWidth() - 32, (int) b.getHeight() - 14, 28, 14,
-                    juce::Justification::centredRight, false);
-    }
-
-    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
-    void mouseExit  (const juce::MouseEvent&) override { repaint(); }
-    void mouseDrag  (const juce::MouseEvent&) override
-    {
-        if (file.existsAsFile())
-            juce::DragAndDropContainer::performExternalDragDropOfFiles (
-                { file.getFullPathName() }, false, this);
-    }
-
-private:
-    void loadPeaks()
-    {
-        juce::AudioFormatManager mgr;
-        mgr.registerBasicFormats();
-        std::unique_ptr<juce::AudioFormatReader> reader (mgr.createReaderFor (file));
-        if (! reader) return;
-
-        int totalSamples = (int) reader->lengthInSamples;
-        const int numPeaks = 150;
-        int samplesPerPeak = std::max (1, totalSamples / numPeaks);
-
-        juce::AudioBuffer<float> buf (1, samplesPerPeak);
-        peaks.resize ((size_t) numPeaks, 0.0f);
-
-        for (int i = 0; i < numPeaks; ++i)
-        {
-            int64_t start = (int64_t) i * samplesPerPeak;
-            int toRead = std::min (samplesPerPeak, totalSamples - (int) start);
-            if (toRead <= 0) break;
-
-            buf.clear();
-            reader->read (&buf, 0, toRead, start, true, false);
-
-            float peak = 0.0f;
-            auto* data = buf.getReadPointer (0);
-            for (int s = 0; s < toRead; ++s)
-                peak = std::max (peak, std::abs (data[s]));
-            peaks[(size_t) i] = peak;
-        }
-    }
-
-    juce::File   file;
-    juce::String labelText;
-    std::vector<float> peaks;
-};
-
-//==============================================================================
+// CollabSync editor — dark forest-green neumorphic redesign.
+// Layout/state mirror design-reference/DESIGN_HANDOFF.md's vertical order:
+//   header -> divider -> host section -> divider -> host-IP section ->
+//   record button -> status strip -> generated-files grid.
+//
+// Reads processor state through existing accessors only (see the "hard
+// constraints" in the task brief — PluginProcessor's public API is untouched
+// except one additive getter, getInputAudioLevel()).
 class CollabSyncEditor : public juce::AudioProcessorEditor,
                           public juce::ChangeListener,
                           public juce::Timer
@@ -149,48 +29,61 @@ public:
 
 private:
     CollabSyncProcessor& proc;
+    CollabSyncLookAndFeel lnf;
 
+    //==================================================================
     // Header
-    juce::Label titleLabel, statusLabel, latencyLabel;
+    juce::Label titleLabel, versionLabel;
+    ConnectionStatusView connectionStatus { lnf };
 
-    // Connection
-    juce::Label      hostLabel;
-    juce::TextEditor hostInput;
-    juce::TextButton connectButton    { "Connect"    };
-    juce::TextButton disconnectButton { "Disconnect" };
+    //==================================================================
+    // Host section (this instance hosting its own session)
+    SectionLabel hostSectionLabel   { lnf, "Host" };
+    GlowLabel    hostPeerStatus;
 
-    // Session hosting
-    juce::Label      sessionSectionLabel;
-    juce::TextButton startSessionButton { "Start Session" };
-    juce::TextButton stopSessionButton  { "Stop Session"  };
-    juce::Label      sessionStatusLabel;
-    juce::Label      tailscaleIPLabel;
-    juce::TextButton copyIPButton       { "Copy IP" };
+    juce::Label       idleHelperLabel;
+    NeumorphicButton  startSessionButton  { "Start Session", lnf, 700, CST::cream, 16.0f };
 
-    // Record
-    juce::TextButton recordButton { "Record" };
+    ReadoutWell       hostIPReadout       { lnf };
+    NeumorphicButton  copyIPButton        { "Copy IP", lnf, 600, juce::Colour (0xffcfe6da), 13.0f };
+    NeumorphicButton  stopSessionButton   { "Stop Session", lnf, 600, CST::creamAlpha (0.72f), 15.0f };
 
-    // MIDI indicator
-    juce::Label midiLabel;
-    bool midiLightOn = false;
+    //==================================================================
+    // Host IP section (joining a remote host)
+    SectionLabel      hostIPSectionLabel  { lnf, "Host IP" };
+    EditableWell      hostIPInput         { lnf };
+    NeumorphicButton  connectButton       { "Connect", lnf, 700, CST::cream, 15.0f };
+    NeumorphicButton  disconnectButton    { "Disconnect", lnf, 600, CST::creamAlpha (0.55f), 15.0f };
 
-    // Diagnostics
-    juce::Label diagLabel;
+    //==================================================================
+    // Record + status strip
+    RecordButton    recordButton { lnf };
+    IndicatorStrip  indicatorStrip { lnf };
 
-    // Countdown
+    //==================================================================
+    // Generated files preview
+    SectionLabel filesSectionLabel { lnf, "Generated Files" };
+    juce::Label  dragHintLabel;
+
+    std::unique_ptr<AudioFileCard> localAudioCard, remoteAudioCard;
+    std::unique_ptr<MidiFileCard>  localMidiCard,  remoteMidiCard;
+    juce::File lastBuiltSessionDir; // dirty-check so cards are rebuilt only when the session actually changes
+
+    //==================================================================
+    // Countdown overlay (pre-roll before recording starts — real feature,
+    // not part of the visual handoff's state enum, so it's drawn as a modal
+    // overlay on top of everything else rather than folded into the strip).
     juce::Label countdownLabel;
 
-    // Session files
-    juce::Label      filesHeaderLabel;
-    juce::TextButton showInFinderButton { "Show in Finder" };
-    std::unique_ptr<WaveformTile> localWavTile, remoteWavTile;
-    std::unique_ptr<FileTile>     localMidTile, remoteMidTile;
+    //==================================================================
+    // Divider hairlines: computed in resized(), drawn in paint().
+    std::vector<int> dividerYs;
 
     void updateUI();
-    void rebuildFileTiles();
-
-    static void styleButton       (juce::TextButton& b, juce::Colour fill, juce::Colour text = juce::Colours::white);
-    static void styleSectionLabel (juce::Label& l, const juce::String& text);
+    void rebuildFileCards();
+    void layoutGeneratedFilesGrid (int pad, int contentW, int& y);
+    void paintPanelBackground (juce::Graphics&);
+    void paintDividers (juce::Graphics&);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CollabSyncEditor)
 };
