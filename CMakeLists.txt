@@ -5,6 +5,24 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")
 
+# Force every bundled dependency (opus, libjuice, libsodium, IXWebSocket) to
+# build as a STATIC library so it is linked directly into the plugin binary.
+# Without this, some of these libraries default to shared and the plugin ends up
+# with @rpath/libsodium.dylib, @rpath/libixwebsocket.*.dylib, etc. — which exist
+# in the build tree but NOT on another machine, so the installed plugin fails to
+# load ("failed to load for an unknown reason" / plugin-scan error) anywhere but
+# the build machine. Static linking keeps the .vst3/.component self-contained.
+# libjuice's CMakeLists does `option(BUILD_SHARED_LIBS ... ON)`, and because we
+# pass CMAKE_POLICY_VERSION_MINIMUM=3.5 for the older deps, policy CMP0077 runs
+# in OLD mode where option() OVERWRITES a normal variable of the same name —
+# which is why plain `set(BUILD_SHARED_LIBS OFF)` did not stick and the plugin
+# came out linking @rpath/libsodium.dylib etc. (works on the build machine,
+# fails to load anywhere else). Forcing CMP0077 to NEW makes option() honour our
+# variable, so BUILD_SHARED_LIBS OFF wins and opus/libsodium/IXWebSocket all
+# build static and link straight into the self-contained plugin binary.
+set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+set(BUILD_SHARED_LIBS OFF)
+
 # Build libopus from bundled source
 set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
 set(OPUS_BUILD_TESTING        OFF CACHE BOOL "" FORCE)
