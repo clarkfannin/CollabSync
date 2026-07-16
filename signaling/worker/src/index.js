@@ -74,8 +74,20 @@ export class Room {
   async fetch(request) {
     const existing = this.state.getWebSockets();
     if (existing.length >= MAX_PEERS) {
-      // A third joiner: reject before upgrading so the client sees a clean error.
-      return new Response("room_full", { status: 403 });
+      // A third joiner. Complete the upgrade, then send the documented
+      // room_full error and close. Rejecting with a bare 403 before the
+      // handshake instead surfaces client-side as an opaque transport failure
+      // ("expecting status 101, got 403"); going through the protocol lets the
+      // client say "server at capacity" in plain language.
+      //
+      // Deliberately accept() and not state.acceptWebSocket(): this socket must
+      // never land in the room's tracked pair, or it would count toward
+      // MAX_PEERS and be relayed to.
+      const reject = new WebSocketPair();
+      reject[1].accept();
+      reject[1].send(JSON.stringify({ type: "error", reason: "room_full" }));
+      reject[1].close(1013, "room_full"); // 1013 = Try Again Later
+      return new Response(null, { status: 101, webSocket: reject[0] });
     }
 
     const pair = new WebSocketPair();

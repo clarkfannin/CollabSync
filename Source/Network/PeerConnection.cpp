@@ -91,7 +91,15 @@ bool PeerConnection::connect (const juce::String& signalingServerUrl, const juce
     cbs.onRemoteDescription = [this] (const std::string& sdp) { onRemoteDescription (sdp); };
     cbs.onRemoteCandidate   = [this] (const std::string& c)   { onRemoteCandidate (c); };
     cbs.onRemotePubkey      = [this] (const std::vector<uint8_t>& pk) { onRemotePubkey (pk); };
-    cbs.onError             = [this] (const std::string& r)   { setStatus ("Signaling error: " + juce::String (r)); };
+    cbs.onError             = [this] (const std::string& r)
+    {
+        // room_full is the expected "two people are already in there" case
+        // rather than a fault, so it gets plain language instead of a raw code.
+        if (r == "room_full")
+            setStatus ("Server at capacity — a session is already in progress");
+        else
+            setStatus ("Signaling error: " + juce::String (r));
+    };
     cbs.onClosed            = [] { /* expected once the P2P link is up */ };
 
     setStatus ("Connecting to signaling server…");
