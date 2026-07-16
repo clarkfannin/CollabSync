@@ -122,7 +122,7 @@ void AudioFileCard::loadPeaks()
 
 void AudioFileCard::paint (juce::Graphics& g)
 {
-    auto body = paintCardFrame (g, laf, getLocalBounds(), ownerLabel, "Audio",
+    auto body = paintCardFrame (g, laf, getLocalBounds().reduced (CST::shadowMargin), ownerLabel, "Audio",
                                  file.getFileName(), durationText);
 
     if (peaks.empty())
@@ -236,7 +236,7 @@ void MidiFileCard::loadNotes()
 
 void MidiFileCard::paint (juce::Graphics& g)
 {
-    auto body = paintCardFrame (g, laf, getLocalBounds(), ownerLabel, "MIDI",
+    auto body = paintCardFrame (g, laf, getLocalBounds().reduced (CST::shadowMargin), ownerLabel, "MIDI",
                                  file.getFileName(), noteCountText);
 
     if (notes.empty() || body.isEmpty())

@@ -3,9 +3,17 @@ set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$PROJECT_DIR/build"
-DIST_DIR="$PROJECT_DIR/dist"
+# Platform-segregated output: dist/macos/ here, dist/windows/ from CI.
+DIST_DIR="$PROJECT_DIR/dist/macos"
 SCRIPTS_DIR="$PROJECT_DIR/scripts"
-VERSION="0.7.0"
+# Single source of truth: parse the version out of CMakeLists.txt so the pkg can
+# never disagree with the binary it wraps (a stale hardcoded value here once
+# shipped a two-month-old build under a current version number).
+VERSION="$(sed -n 's/^project(CollabSync VERSION \([0-9.]*\)).*/\1/p' "$PROJECT_DIR/CMakeLists.txt")"
+if [ -z "$VERSION" ]; then
+    echo "ERROR: could not parse version from CMakeLists.txt"
+    exit 1
+fi
 PKG_NAME="CollabSync-$VERSION.pkg"
 
 echo "==> Gathering plugin bundles..."
@@ -29,9 +37,18 @@ cp -r "$VST3_SRC" "$STAGING/Library/Audio/Plug-Ins/VST3/"
 echo "==> Building component package..."
 mkdir -p "$DIST_DIR"
 
+# pkgbuild --scripts copies EVERY file in the given directory into the package's
+# script payload, so point it at a directory holding only postinstall rather than
+# at scripts/ (which would ship package.sh itself inside the installer).
+PKG_SCRIPTS="$DIST_DIR/pkg-scripts"
+rm -rf "$PKG_SCRIPTS"
+mkdir -p "$PKG_SCRIPTS"
+cp "$SCRIPTS_DIR/postinstall" "$PKG_SCRIPTS/postinstall"
+chmod +x "$PKG_SCRIPTS/postinstall"
+
 pkgbuild \
     --root "$STAGING" \
-    --scripts "$SCRIPTS_DIR" \
+    --scripts "$PKG_SCRIPTS" \
     --identifier "com.collabsync.plugin" \
     --version "$VERSION" \
     --install-location "/" \
@@ -82,6 +99,7 @@ rm -f "$DIST_DIR/CollabSync-component.pkg"
 rm -f "$DIST_DIR/distribution.xml"
 rm -f "$DIST_DIR/welcome.html"
 rm -rf "$STAGING"
+rm -rf "$PKG_SCRIPTS"
 
 echo ""
 echo "✓ Installer ready: $DIST_DIR/$PKG_NAME"

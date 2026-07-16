@@ -1,5 +1,24 @@
 #include "CollabSyncComponents.h"
 
+namespace
+{
+    // The rectangle a shadow-casting component should actually draw its shape in.
+    // Components are laid out CST::shadowMargin larger than their visible size on
+    // every side (see CST::expandedForShadow) so drop shadows have somewhere to
+    // land; without that margin JUCE clips them square at the component edge.
+    // Anything positioned relative to the shape — child components, centred text —
+    // must use this rather than getLocalBounds().
+    juce::Rectangle<int> shapeBounds (const juce::Component& c)
+    {
+        return c.getLocalBounds().reduced (CST::shadowMargin);
+    }
+
+    // A lit dot's glow reaches ~14px past its edge at the pulse peak. Components
+    // that draw a dot near their own edge inset it by this much for the same
+    // reason shapeBounds exists — otherwise the halo is sliced off square.
+    constexpr int dotGlowMargin = 14;
+}
+
 //==============================================================================
 // GlowLabel
 //==============================================================================
@@ -98,7 +117,7 @@ NeumorphicButton::NeumorphicButton (const juce::String& buttonText, CollabSyncLo
 
 void NeumorphicButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
 {
-    auto bounds = getLocalBounds().toFloat();
+    auto bounds = shapeBounds (*this).toFloat();
     auto fill = CST::buttonFill;
     if (down)             fill = fill.brighter (0.06f);
     else if (highlighted) fill = fill.brighter (0.03f);
@@ -109,7 +128,7 @@ void NeumorphicButton::paintButton (juce::Graphics& g, bool highlighted, bool do
 
     g.setColour (textCol.withMultipliedAlpha (alphaMul));
     g.setFont (laf.sans (size, weight).withExtraKerningFactor (0.01f));
-    g.drawText (getButtonText(), getLocalBounds(), juce::Justification::centred, false);
+    g.drawText (getButtonText(), bounds.toNearestInt(), juce::Justification::centred, false);
 }
 
 //==============================================================================
@@ -131,12 +150,12 @@ void ReadoutWell::setValue (const juce::String& text, juce::Colour textColour)
 
 void ReadoutWell::paint (juce::Graphics& g)
 {
-    CollabSyncLookAndFeel::paintRecessed (g, getLocalBounds().toFloat(), CST::radiusWell, CST::recessedFill);
+    CollabSyncLookAndFeel::paintRecessed (g, shapeBounds (*this).toFloat(), CST::radiusWell, CST::recessedFill);
 }
 
 void ReadoutWell::resized()
 {
-    valueLabel.setBounds (getLocalBounds().reduced (16, 0));
+    valueLabel.setBounds (shapeBounds (*this).reduced (16, 0));
 }
 
 //==============================================================================
@@ -157,12 +176,12 @@ EditableWell::EditableWell (CollabSyncLookAndFeel& lf) : laf (lf)
 
 void EditableWell::paint (juce::Graphics& g)
 {
-    CollabSyncLookAndFeel::paintRecessed (g, getLocalBounds().toFloat(), CST::radiusWell, CST::recessedFill);
+    CollabSyncLookAndFeel::paintRecessed (g, shapeBounds (*this).toFloat(), CST::radiusWell, CST::recessedFill);
 }
 
 void EditableWell::resized()
 {
-    editor.setBounds (getLocalBounds().reduced (16, 0));
+    editor.setBounds (shapeBounds (*this).reduced (16, 0));
 }
 
 //==============================================================================
@@ -199,7 +218,7 @@ void RecordButton::timerCallback()
 
 void RecordButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
 {
-    auto bounds = getLocalBounds().toFloat();
+    auto bounds = shapeBounds (*this).toFloat();
     juce::Path shape;
     shape.addRoundedRectangle (bounds, CST::radiusRecord);
 
@@ -262,7 +281,7 @@ void RecordButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
     int textW = font.getStringWidth (label);
     int dotSpace = showDot ? (int) (dotRadius * 2.0f + 11.0f) : 0;
     int totalW = textW + dotSpace;
-    int startX = (getWidth() - totalW) / 2;
+    int startX = bounds.getCentreX() - totalW / 2;
 
     if (showDot)
     {
@@ -278,7 +297,8 @@ void RecordButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
     }
 
     g.setColour (textColour);
-    g.drawText (label, startX + dotSpace, 0, textW, getHeight(), juce::Justification::centredLeft, false);
+    g.drawText (label, startX + dotSpace, (int) bounds.getY(), textW, (int) bounds.getHeight(),
+                juce::Justification::centredLeft, false);
 }
 
 //==============================================================================
@@ -318,7 +338,9 @@ void ConnectionStatusView::setStatus (const juce::String& text, juce::Colour dot
 int ConnectionStatusView::getPreferredWidth() const
 {
     const int dotDiam = 8, gap = 9;
-    return dotDiam + gap + currentFont.getStringWidth (currentText) + 2;
+    // Includes the dot's reserved glow margin — resized() shifts the label right
+    // by the same amount, so omitting it here clips the text.
+    return dotGlowMargin + dotDiam + gap + currentFont.getStringWidth (currentText) + 2;
 }
 
 void ConnectionStatusView::timerCallback()
@@ -329,14 +351,14 @@ void ConnectionStatusView::timerCallback()
 void ConnectionStatusView::resized()
 {
     const int dotDiam = 8, gap = 9;
-    label.setBounds (getLocalBounds().withTrimmedLeft (dotDiam + gap));
+    label.setBounds (getLocalBounds().withTrimmedLeft (dotGlowMargin + dotDiam + gap));
 }
 
 void ConnectionStatusView::paint (juce::Graphics& g)
 {
     const float dotDiam = 8.0f;
     float cy = (float) getHeight() * 0.5f;
-    float cx = dotDiam * 0.5f;
+    float cx = (float) dotGlowMargin + dotDiam * 0.5f;
 
     float pulseAmount = (dotOn && pulse) ? CollabSyncLookAndFeel::pulsePhase (1.1) : 0.0f;
     CollabSyncLookAndFeel::paintGlowDot (g, { cx, cy }, dotDiam * 0.5f, dotColour, dotOn, pulseAmount);
@@ -380,10 +402,10 @@ void IndicatorStrip::timerCallback()
 
 void IndicatorStrip::paint (juce::Graphics& g)
 {
-    auto bounds = getLocalBounds().toFloat();
+    auto bounds = shapeBounds (*this).toFloat();
     CollabSyncLookAndFeel::paintRecessed (g, bounds, CST::radiusRecord, CST::recessedFill);
 
-    auto content = getLocalBounds().reduced (16, 14);
+    auto content = shapeBounds (*this).reduced (16, 14);
     if (content.isEmpty())
         return;
 

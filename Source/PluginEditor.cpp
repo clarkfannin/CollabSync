@@ -118,24 +118,22 @@ void CollabSyncEditor::paintPanelBackground (juce::Graphics& g)
     g.setGradientFill (grad);
     g.fillRect (b);
 
-    // Inset bevel vignette — approximates the panel's outer inset box-shadow.
+    // Panel edge bevel — "inset 6px 6px 16px rgba(0,0,0,.55)" plus
+    // "inset -6px -6px 16px rgba(120,220,175,.04)". These hug the window border;
+    // spreading them across the panel (as a linear vignette does) washes out the
+    // radial gradient above and flattens the whole surface to one dead green.
     {
         juce::Graphics::ScopedSaveState save (g);
-        juce::ColourGradient dark (juce::Colours::black.withAlpha (0.55f), b.getX(), b.getY(),
-                                    juce::Colours::black.withAlpha (0.0f),
-                                    b.getX() + b.getWidth() * 0.35f, b.getY() + b.getHeight() * 0.35f, false);
-        g.setGradientFill (dark);
-        g.fillRect (b);
 
-        juce::ColourGradient light (CST::mint.withAlpha (0.04f), b.getRight(), b.getBottom(),
-                                     CST::mint.withAlpha (0.0f),
-                                     b.getRight() - b.getWidth() * 0.35f, b.getBottom() - b.getHeight() * 0.35f, false);
-        g.setGradientFill (light);
-        g.fillRect (b);
+        juce::Path panel;
+        panel.addRectangle (b);
+        g.reduceClipRegion (panel);
+
+        CollabSyncLookAndFeel::paintInsetShadow (g, panel, { 6.0f, 6.0f }, 16.0f,
+                                                  juce::Colours::black.withAlpha (0.55f));
+        CollabSyncLookAndFeel::paintInsetShadow (g, panel, { -6.0f, -6.0f }, 16.0f,
+                                                  juce::Colour (0xff78dcaf).withAlpha (0.04f));
     }
-
-    // Grain overlay: default grain 35% -> 35/100 * 0.7 = 0.245 effective opacity.
-    lnf.paintGrainOverlay (g, getLocalBounds(), 0.245f);
 }
 
 void CollabSyncEditor::paintDividers (juce::Graphics& g)
@@ -189,7 +187,7 @@ void CollabSyncEditor::layoutGeneratedFilesGrid (int pad, int contentW, int& y)
         int row = (int) (i / (size_t) columns);
         int x = pad + col * (colW + gap);
         int cardY = y + row * (cardH + gap);
-        cards[i]->setBounds (x, cardY, colW, cardH);
+        cards[i]->setBounds (CST::expandedForShadow ({ x, cardY, colW, cardH }));
         cards[i]->setVisible (true);
     }
 
@@ -249,11 +247,11 @@ void CollabSyncEditor::resized()
             stopSessionButton.setVisible (true);
 
             const int copyW = 96;
-            hostIPReadout.setBounds (pad, y, contentW - copyW - CST::gridGap, 52);
-            copyIPButton.setBounds (pad + contentW - copyW, y, copyW, 52);
+            hostIPReadout.setBounds (CST::expandedForShadow ({ pad, y, contentW - copyW - CST::gridGap, 52 }));
+            copyIPButton.setBounds (CST::expandedForShadow ({ pad + contentW - copyW, y, copyW, 52 }));
             y += 52 + 14;
 
-            stopSessionButton.setBounds (pad, y, contentW, 52);
+            stopSessionButton.setBounds (CST::expandedForShadow ({ pad, y, contentW, 52 }));
             y += 52;
         }
         else
@@ -267,7 +265,7 @@ void CollabSyncEditor::resized()
             idleHelperLabel.setBounds (pad, y, contentW, 18);
             y += 18 + 14;
 
-            startSessionButton.setBounds (pad, y, contentW, 56);
+            startSessionButton.setBounds (CST::expandedForShadow ({ pad, y, contentW, 56 }));
             y += 56;
         }
     }
@@ -279,24 +277,24 @@ void CollabSyncEditor::resized()
         hostIPSectionLabel.setBounds (pad, y, 140, 16);
         y += 16 + 9;
 
-        hostIPInput.setBounds (pad, y, contentW, 52);
+        hostIPInput.setBounds (CST::expandedForShadow ({ pad, y, contentW, 52 }));
         y += 52 + 14;
 
         int btnW = (contentW - CST::gridGap) / 2;
-        connectButton.setBounds (pad, y, btnW, 52);
-        disconnectButton.setBounds (pad + btnW + CST::gridGap, y, btnW, 52);
+        connectButton.setBounds (CST::expandedForShadow ({ pad, y, btnW, 52 }));
+        disconnectButton.setBounds (CST::expandedForShadow ({ pad + btnW + CST::gridGap, y, btnW, 52 }));
         y += 52;
     }
 
     y += 20; // spacer before the record button
 
-    recordButton.setBounds (pad, y, contentW, 56);
+    recordButton.setBounds (CST::expandedForShadow ({ pad, y, contentW, 56 }));
     y += 56;
 
     y += 20; // margin-top on the status strip
 
     const int stripH = 46;
-    indicatorStrip.setBounds (pad, y, contentW, stripH);
+    indicatorStrip.setBounds (CST::expandedForShadow ({ pad, y, contentW, stripH }));
     y += stripH;
 
     // ---- Generated files ----

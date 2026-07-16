@@ -26,8 +26,6 @@ CollabSyncLookAndFeel::CollabSyncLookAndFeel()
     monoRegular  = loadTypeface (BinaryData::DMMonoRegular_ttf,  BinaryData::DMMonoRegular_ttfSize);
     monoMedium   = loadTypeface (BinaryData::DMMonoMedium_ttf,   BinaryData::DMMonoMedium_ttfSize);
 
-    grainTexture = createGrainTexture();
-
     setColour (juce::TextEditor::backgroundColourId,     juce::Colours::transparentBlack);
     setColour (juce::TextEditor::outlineColourId,         juce::Colours::transparentBlack);
     setColour (juce::TextEditor::focusedOutlineColourId,  juce::Colours::transparentBlack);
@@ -72,36 +70,6 @@ juce::Font CollabSyncLookAndFeel::getLabelFont (juce::Label& l)
 }
 
 //==============================================================================
-juce::Image CollabSyncLookAndFeel::createGrainTexture()
-{
-    const int size = 128;
-    juce::Image img (juce::Image::ARGB, size, size, true);
-    juce::Random rnd (0x9E3779B9);
-
-    juce::Image::BitmapData bd (img, juce::Image::BitmapData::writeOnly);
-    for (int y = 0; y < size; ++y)
-    {
-        for (int x = 0; x < size; ++x)
-        {
-            auto v = (juce::uint8) rnd.nextInt (256);
-            bd.setPixelColour (x, y, juce::Colour (v, v, v));
-        }
-    }
-    return img;
-}
-
-void CollabSyncLookAndFeel::paintGrainOverlay (juce::Graphics& g, juce::Rectangle<int> area, float opacity) const
-{
-    if (opacity <= 0.0f || area.isEmpty())
-        return;
-
-    juce::Graphics::ScopedSaveState save (g);
-    g.reduceClipRegion (area);
-    g.setTiledImageFill (grainTexture, area.getX(), area.getY(), opacity);
-    g.fillRect (area);
-}
-
-//==============================================================================
 void CollabSyncLookAndFeel::paintRaised (juce::Graphics& g, juce::Rectangle<float> bounds,
                                           float radius, juce::Colour fill, float alphaMul)
 {
@@ -122,17 +90,50 @@ void CollabSyncLookAndFeel::paintRaised (juce::Graphics& g, juce::Rectangle<floa
     g.setColour (fill.withMultipliedAlpha (alphaMul));
     g.fillPath (shape);
 
-    // Soft top highlight — approximates "inset 0 1px 0 rgba(150,230,190,.10)"
+    // "inset 0 1px 0 rgba(150,230,190,.10)" — a hard 1px lit edge along the top,
+    // zero blur. This crisp line is most of what reads as "raised"; drawing it as
+    // a soft vertical fade washes the top third of the button instead.
     {
         juce::Graphics::ScopedSaveState save (g);
         g.reduceClipRegion (shape);
-        juce::ColourGradient grad (juce::Colour (0xff96e6c4).withAlpha (0.10f * alphaMul),
-                                    bounds.getCentreX(), bounds.getY(),
-                                    juce::Colour (0xff96e6c4).withAlpha (0.0f),
-                                    bounds.getCentreX(), bounds.getY() + juce::jmax (6.0f, bounds.getHeight() * 0.3f),
-                                    false);
-        g.setGradientFill (grad);
-        g.fillRect (bounds);
+
+        juce::Path lip (shape);
+        lip.applyTransform (juce::AffineTransform::translation (0.0f, 1.0f));
+
+        g.setColour (juce::Colour (0xff96e6c4).withAlpha (0.10f * alphaMul));
+        g.strokePath (lip, juce::PathStrokeType (2.0f));
+    }
+}
+
+void CollabSyncLookAndFeel::paintInsetShadow (juce::Graphics& g, const juce::Path& shape,
+                                              juce::Point<float> offset, float blur, juce::Colour colour)
+{
+    if (blur <= 0.0f || colour.isTransparent())
+        return;
+
+    // Walk outward from the border in 1px steps. Each step strokes the outline
+    // (translated by the offset) at a widening thickness with alpha falling off
+    // toward zero, so the strokes accumulate into a soft band densest against the
+    // edge — the falloff CSS's blur radius produces. The caller's clip keeps the
+    // outer half of each stroke off the surface, which is what makes the band sit
+    // inside the shape.
+    const int steps = juce::jmax (1, (int) std::ceil (blur));
+
+    for (int i = steps; i >= 1; --i)
+    {
+        float t = (float) i / (float) steps;   // 1 at the outermost, faintest step
+
+        // Quadratic falloff approximates a Gaussian closely enough at these radii
+        // and keeps the edge itself near full strength.
+        float alpha = colour.getFloatAlpha() * (1.0f - t) * (1.0f - t);
+        if (alpha <= 0.001f)
+            continue;
+
+        juce::Path outline (shape);
+        outline.applyTransform (juce::AffineTransform::translation (offset.x, offset.y));
+
+        g.setColour (colour.withAlpha (alpha));
+        g.strokePath (outline, juce::PathStrokeType (t * blur * 2.0f));
     }
 }
 
@@ -151,25 +152,11 @@ void CollabSyncLookAndFeel::paintRecessed (juce::Graphics& g, juce::Rectangle<fl
     juce::Graphics::ScopedSaveState save (g);
     g.reduceClipRegion (shape);
 
-    // Dark inset shadow emanating from the top-left — "inset 5px 5px 11px rgba(0,0,0,.72-.75)"
-    juce::ColourGradient dark (juce::Colours::black.withAlpha (0.65f),
-                                bounds.getX(), bounds.getY(),
-                                juce::Colours::black.withAlpha (0.0f),
-                                bounds.getX() + bounds.getWidth() * 0.65f,
-                                bounds.getY() + bounds.getHeight() * 0.65f,
-                                false);
-    g.setGradientFill (dark);
-    g.fillRect (bounds);
+    // "inset 5px 5px 11px rgba(0,0,0,.75)" — dark band along the top-left edge.
+    paintInsetShadow (g, shape, { 5.0f, 5.0f }, 11.0f, juce::Colours::black.withAlpha (0.75f));
 
-    // Faint mint inset highlight from the bottom-right — "inset -3px -3px 9px rgba(95,216,166,.07)"
-    juce::ColourGradient lightG (CST::mint.withAlpha (0.10f),
-                                  bounds.getRight(), bounds.getBottom(),
-                                  CST::mint.withAlpha (0.0f),
-                                  bounds.getRight() - bounds.getWidth() * 0.6f,
-                                  bounds.getBottom() - bounds.getHeight() * 0.6f,
-                                  false);
-    g.setGradientFill (lightG);
-    g.fillRect (bounds);
+    // "inset -3px -3px 9px rgba(95,216,166,.07)" — faint mint along the bottom-right.
+    paintInsetShadow (g, shape, { -3.0f, -3.0f }, 9.0f, CST::mint.withAlpha (0.07f));
 }
 
 //==============================================================================
@@ -208,14 +195,26 @@ void CollabSyncLookAndFeel::paintGlowDot (juce::Graphics& g, juce::Point<float> 
         return;
     }
 
-    // Glow halo — "0 0 8px <color>", expanding to "0 0 12px 2px" at the pulse midpoint.
-    float glowExtra = 3.0f + pulseAmount * 6.0f;
-    for (int i = 3; i >= 1; --i)
+    // Glow halo — "0 0 6px <colour>" at rest, "0 0 12px 2px" at the pulse midpoint.
+    // Built from many thin rings: at three rings the steps land far enough apart
+    // to read as concentric discs with visible edges rather than a soft halo.
     {
-        float t  = (float) i / 3.0f;
-        float rr = radius + glowExtra * t;
-        g.setColour (colour.withAlpha (0.10f * (1.0f - t) + 0.05f));
-        g.fillEllipse (juce::Rectangle<float> (rr * 2.0f, rr * 2.0f).withCentre (centre));
+        float glowRadius = 6.0f + pulseAmount * 6.0f;   // CSS blur: 6px -> 12px
+        float spread     = pulseAmount * 2.0f;          // CSS spread: 0 -> 2px
+        const int rings  = 24;
+
+        for (int i = rings; i >= 1; --i)
+        {
+            float t  = (float) i / (float) rings;       // 1 = outermost
+            float rr = radius + spread + glowRadius * t;
+
+            // Quadratic falloff, matching the blur profile used for the inset
+            // shadows so glow and bevel share a visual language.
+            float alpha = 0.22f * (1.0f - t) * (1.0f - t);
+
+            g.setColour (colour.withAlpha (alpha));
+            g.fillEllipse (juce::Rectangle<float> (rr * 2.0f, rr * 2.0f).withCentre (centre));
+        }
     }
 
     g.setColour (colour);
