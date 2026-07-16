@@ -7,8 +7,6 @@
 //   - The bundled DM Sans / DM Mono typefaces (loaded from BinaryData; falls
 //     back to JUCE's default sans/mono system faces if the binary data is
 //     unavailable for some reason).
-//   - The procedurally-generated grain/noise texture used for the panel's
-//     film-grain overlay.
 //   - Static paint helpers that draw the two neumorphic surface treatments
 //     used everywhere in the UI: "raised" (buttons) and "recessed" (wells,
 //     cards, the status strip, the disabled record button) — plus a glow-dot
@@ -39,11 +37,18 @@ public:
     juce::Font getLabelFont (juce::Label&) override;
 
     //======================================================================
-    // Grain overlay — tiled noise texture drawn at low opacity over the panel.
-    void paintGrainOverlay (juce::Graphics& g, juce::Rectangle<int> area, float opacity) const;
-
-    //======================================================================
     // Neumorphic surface helpers (static: no LookAndFeel state required).
+
+    // CSS `inset <dx> <dy> <blur> <colour>`. Draws the shadow an inset box-shadow
+    // casts: a blurred band hugging the inside of the shape's border, thickest on
+    // the side the offset points away from. Caller must have clipped to `shape`.
+    //
+    // Implemented by stroking the shape's own outline with progressively wider,
+    // fainter strokes — a gradient fill across the whole face (the obvious
+    // approach) lights the entire surface instead of just its border, which is
+    // what makes a bevel read as an uneven wash.
+    static void paintInsetShadow (juce::Graphics& g, const juce::Path& shape,
+                                   juce::Point<float> offset, float blur, juce::Colour colour);
 
     // Raised button chrome: dark drop-shadow (down-right) + faint mint
     // drop-shadow (up-left) + flat fill + soft top highlight.
@@ -67,9 +72,6 @@ public:
 private:
     juce::Typeface::Ptr sansRegular, sansMedium, sansSemiBold, sansBold;
     juce::Typeface::Ptr monoRegular, monoMedium;
-
-    juce::Image grainTexture;
-    static juce::Image createGrainTexture();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CollabSyncLookAndFeel)
 };

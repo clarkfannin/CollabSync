@@ -50,16 +50,18 @@ jobs:
 
       # JUCE writes the plugin/app products under
       # build/CollabSync_artefacts/<Config>/<Format>/. Collect the Standalone .exe
-      # and the VST3 into a flat staging folder for upload.
+      # and the VST3 into dist/windows/ — mirroring scripts/package.sh, which
+      # writes the macOS installer to dist/macos/.
       - name: Stage artifacts
         shell: pwsh
         run: |
           $art = "build/CollabSync_artefacts/${{ env.BUILD_TYPE }}"
-          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          $stage = "dist/windows"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
           $exe = Get-ChildItem -Path "$art/Standalone" -Filter *.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($exe) {
-            Copy-Item $exe.FullName -Destination staging/
+            Copy-Item $exe.FullName -Destination $stage/
             Write-Host "Staged standalone: $($exe.Name)"
           } else {
             Write-Warning "No Standalone .exe found under $art/Standalone"
@@ -67,18 +69,18 @@ jobs:
 
           $vst3 = Get-ChildItem -Path "$art/VST3" -Filter *.vst3 -Directory -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($vst3) {
-            Copy-Item $vst3.FullName -Destination staging/ -Recurse
+            Copy-Item $vst3.FullName -Destination $stage/ -Recurse
             Write-Host "Staged VST3: $($vst3.Name)"
           } else {
             Write-Warning "No .vst3 found under $art/VST3"
           }
 
           Write-Host "--- staging contents ---"
-          Get-ChildItem -Recurse staging | Select-Object FullName
+          Get-ChildItem -Recurse $stage | Select-Object FullName
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: CollabSync-Windows
-          path: staging/
+          path: dist/windows/
           if-no-files-found: error

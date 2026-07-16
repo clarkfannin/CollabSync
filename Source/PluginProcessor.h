@@ -1,6 +1,6 @@
 #pragma once
 
-#define COLLABSYNC_VERSION "0.7.0"
+#define COLLABSYNC_VERSION "0.8.0"
 
 // Default Cloudflare Worker signaling endpoint (up to and including "/rtc").
 // Override at build time with -DCOLLABSYNC_SIGNALING_URL="wss://.../rtc", or

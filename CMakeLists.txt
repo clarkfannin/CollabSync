@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(CollabSync VERSION 0.7.0)
+project(CollabSync VERSION 0.8.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -188,14 +188,17 @@ if(WIN32)
 endif()
 
 # Ad-hoc sign the plugin after build so DAWs can load it without Gatekeeper blocking
+# --deep is deprecated by Apple and signs nested code inconsistently. These
+# bundles embed no dylibs (opus is static), so signing the bundle alone is
+# sufficient and behaves predictably across machines.
 if(APPLE)
     add_custom_command(TARGET CollabSync_VST3 POST_BUILD
-        COMMAND codesign --force --deep -s -
+        COMMAND codesign --force -s -
             "/Library/Audio/Plug-Ins/VST3/CollabSync.vst3"
         COMMENT "Ad-hoc signing CollabSync.vst3"
     )
     add_custom_command(TARGET CollabSync_AU POST_BUILD
-        COMMAND codesign --force --deep -s -
+        COMMAND codesign --force -s -
             "/Library/Audio/Plug-Ins/Components/CollabSync.component"
         COMMENT "Ad-hoc signing CollabSync.component"
     )

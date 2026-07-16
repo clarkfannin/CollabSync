@@ -51,6 +51,23 @@ namespace CST
     constexpr float radiusPill   = 9.0f;
 
     // Spacing
+    //
+    // Neumorphic surfaces cast shadows outside their shape (the widest is the
+    // raised button's "6px 6px 14px", reaching ~20px down-right). A JUCE component
+    // cannot paint beyond its own bounds, so components that draw these surfaces
+    // are grown by shadowMargin on every side and paint their shape inset by the
+    // same amount, letting the shadow land in the reserved space instead of being
+    // sliced square at the edge. Layout code positions the *visible* rectangle and
+    // calls expandedForShadow() to get the bounds to actually set.
+    constexpr int shadowMargin   = 20;
+
+    // Grows a visible rectangle into the component bounds needed to paint it with
+    // room for its shadows. Inverse of Rectangle::reduced (shadowMargin).
+    inline juce::Rectangle<int> expandedForShadow (juce::Rectangle<int> visible)
+    {
+        return visible.expanded (shadowMargin);
+    }
+
     constexpr int panelPadding   = 28;
     constexpr int dividerMargin  = 22;
     constexpr int gridGap        = 12;

@@ -8,8 +8,22 @@ AU="/Library/Audio/Plug-Ins/Components/CollabSync.component"
 for PLUGIN in "$VST3" "$AU"; do
     if [ -e "$PLUGIN" ]; then
         xattr -rd com.apple.quarantine "$PLUGIN" 2>/dev/null || true
-        codesign --force --deep -s - "$PLUGIN"
-        echo "Signed: $PLUGIN"
+
+        # --deep is deprecated by Apple and signs nested code inconsistently; for
+        # a self-contained bundle (no embedded dylibs — opus is linked statically)
+        # signing the bundle itself is both sufficient and more predictable.
+        if codesign --force -s - "$PLUGIN"; then
+            echo "Signed: $PLUGIN"
+        else
+            # A half-applied signature makes a DAW reject the plugin outright,
+            # which is worse than shipping it unsigned. Strip it and let the
+            # bundle load unsigned rather than broken.
+            echo "WARNING: codesign failed for $PLUGIN — removing signature" >&2
+            codesign --remove-signature "$PLUGIN" 2>/dev/null || true
+        fi
+
+        # Surface the resulting state in the installer log either way.
+        codesign -vv "$PLUGIN" 2>&1 || true
     fi
 done
 
