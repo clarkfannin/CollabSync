@@ -600,6 +600,14 @@ void CollabSyncProcessor::connect (const juce::String& roomCode, const juce::Str
     if (host.startsWithIgnoreCase ("ws://") || host.startsWithIgnoreCase ("wss://"))
         signalingHost = host;
 
+    // No endpoint baked in at build time and none typed in: bail with something
+    // readable rather than handing an empty URL to the WebSocket layer.
+    if (signalingHost.isEmpty())
+    {
+        onStatusChanged ("No signaling server configured");
+        return;
+    }
+
     peer = std::make_unique<PeerConnection> (this);
     peer->connect (signalingHost, roomCode);
 }

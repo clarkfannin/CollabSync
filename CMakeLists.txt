@@ -167,11 +167,31 @@ target_sources(CollabSync PRIVATE
     Source/Session/Recorder.cpp
 )
 
+# Signaling endpoint, injected at build time. There is deliberately no default
+# in source: the URL is a personal Cloudflare subdomain, and a checked-in
+# default both leaks the owner's identity and silently points every build at
+# one person's server. Supply it either way:
+#   cmake -B build -DCOLLABSYNC_SIGNALING_URL="wss://<worker>/rtc"
+#   export COLLABSYNC_SIGNALING_URL="wss://<worker>/rtc"
+# Left unset the plugin still builds and loads; it reports "No signaling server
+# configured" rather than failing obscurely, and the host field still accepts a
+# ws(s):// URL at runtime.
+set(COLLABSYNC_SIGNALING_URL "" CACHE STRING "Signaling WebSocket endpoint, e.g. wss://<worker>/rtc")
+if(NOT COLLABSYNC_SIGNALING_URL AND DEFINED ENV{COLLABSYNC_SIGNALING_URL})
+    set(COLLABSYNC_SIGNALING_URL "$ENV{COLLABSYNC_SIGNALING_URL}")
+endif()
+if(COLLABSYNC_SIGNALING_URL)
+    message(STATUS "CollabSync signaling endpoint: ${COLLABSYNC_SIGNALING_URL}")
+else()
+    message(WARNING "COLLABSYNC_SIGNALING_URL is not set — the plugin will build but cannot connect until one is supplied at runtime.")
+endif()
+
 target_compile_definitions(CollabSync PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
+    $<$<BOOL:${COLLABSYNC_SIGNALING_URL}>:COLLABSYNC_SIGNALING_URL="${COLLABSYNC_SIGNALING_URL}">
 )
 
 target_link_libraries(CollabSync PRIVATE

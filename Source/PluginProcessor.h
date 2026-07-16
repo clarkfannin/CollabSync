@@ -2,11 +2,15 @@
 
 #define COLLABSYNC_VERSION "0.8.0"
 
-// Default Cloudflare Worker signaling endpoint (up to and including "/rtc").
-// Override at build time with -DCOLLABSYNC_SIGNALING_URL="wss://.../rtc", or
-// type a ws(s):// URL into the plugin's host field to override at runtime.
+// Cloudflare Worker signaling endpoint (up to and including "/rtc"), injected
+// at build time by CMakeLists.txt from -DCOLLABSYNC_SIGNALING_URL or the
+// environment variable of the same name. No default is hardcoded here on
+// purpose: the URL is somebody's personal subdomain and does not belong in
+// source. Empty means "not configured" — connect() says so plainly instead of
+// dialling a stranger. A ws(s):// URL in the host field still overrides at
+// runtime.
 #ifndef COLLABSYNC_SIGNALING_URL
- #define COLLABSYNC_SIGNALING_URL "wss://collabsync-signaling.jclarkfii.workers.dev/rtc"
+ #define COLLABSYNC_SIGNALING_URL ""
 #endif
 
 #include <JuceHeader.h>
