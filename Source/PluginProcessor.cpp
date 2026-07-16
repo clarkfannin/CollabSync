@@ -276,6 +276,14 @@ void CollabSyncProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
         if (recorder->isRecording())
             recorder->appendLocalAudio (processBlockInterleaved.data(), numSamples);
+
+        // UI-only: decaying peak of local input, read by the editor to drive the
+        // "Audio" activity indicator during recording. Additive — see getInputAudioLevel().
+        float blockPeak = 0.0f;
+        for (int i = 0; i < numSamples; ++i)
+            blockPeak = std::max (blockPeak, std::max (std::abs (L[i]), std::abs (R[i])));
+        float decayed = inputAudioLevel.load (std::memory_order_relaxed) * 0.9f;
+        inputAudioLevel.store (std::max (decayed, blockPeak), std::memory_order_relaxed);
     }
 
     // --- Inject received remote audio from receive ring buffer ---
