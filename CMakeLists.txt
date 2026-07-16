@@ -1,9 +1,20 @@
 cmake_minimum_required(VERSION 3.22)
+
+# Both of these MUST be set before project(): project() creates them as empty
+# cache entries, after which a `set(... CACHE ...)` without FORCE is a silent
+# no-op. Setting them below project() leaves both empty.
+#
+# Universal build so the plugin loads in Intel-hosted DAWs. Left unset, CMake
+# targets only the build machine's arch, producing an arm64-only binary that an
+# Intel FL Studio cannot load at all. This propagates to the bundled deps too,
+# since they are all add_subdirectory/FetchContent subprojects.
+set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build universal (Apple Silicon + Intel)")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")
+
 project(CollabSync VERSION 0.8.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")
 
 # Force every bundled dependency (opus, libjuice, libsodium, IXWebSocket) to
 # build as a STATIC library so it is linked directly into the plugin binary.
