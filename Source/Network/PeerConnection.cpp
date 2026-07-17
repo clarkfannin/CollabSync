@@ -100,7 +100,11 @@ bool PeerConnection::connect (const juce::String& signalingServerUrl, const juce
         else
             setStatus ("Signaling error: " + juce::String (r));
     };
-    cbs.onClosed            = [] { /* expected once the P2P link is up */ };
+    // Signaling now stays open for the session, so a close is no longer routine.
+    // It is still not fatal: the P2P link runs independently of the server, and
+    // we only lose the peer-left channel. Not treated as a disconnect -- doing so
+    // is exactly the bug that tore down live links.
+    cbs.onClosed            = [] {};
 
     setStatus ("Connecting to signaling server…");
     return signaling->connect (signalingServerUrl, roomCode, std::move (cbs));
@@ -205,18 +209,22 @@ void PeerConnection::onIceStateChanged (int state)
         case JUICE_STATE_COMPLETED:
             iceConnected.store (true);
             tryAnnounceConnected();
-            // P2P path fixed — signaling no longer needed. We are on the libjuice
-            // agent thread here, and close() joins the WebSocket thread, which may
-            // itself be waiting on us: that pair deadlocks. Defer so every close
-            // runs on the message thread, one at a time.
-            if (state == JUICE_STATE_COMPLETED && signaling)
-            {
-                juce::MessageManager::callAsync ([this, alive = alive]
-                {
-                    if (alive->load() && signaling)
-                        signaling->close();
-                });
-            }
+            // Signaling deliberately stays open for the whole session.
+            //
+            // Closing it here once the P2P path was fixed looked free, but the
+            // server cannot tell a tidy "we're done" close from a peer quitting:
+            // its webSocketClose handler broadcasts peer-left either way. So
+            // whoever completed ICE first hung up, and the other side was told
+            // its peer had left and tore down a perfectly good link -- while the
+            // side that hung up first, having nothing left to notify it, still
+            // showed itself as connected.
+            //
+            // It also removed the only channel a real disconnect could arrive
+            // on: once both sides had hung up, a peer quitting went unnoticed
+            // (JUICE_STATE_DISCONNECTED below is a no-op).
+            //
+            // An idle socket costs nothing -- the room's Durable Object uses the
+            // WebSocket Hibernation API -- so there is nothing to reclaim here.
             break;
         case JUICE_STATE_FAILED:
             setStatus ("Connection failed (could not reach peer)");

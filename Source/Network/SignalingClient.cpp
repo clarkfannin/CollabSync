@@ -31,8 +31,11 @@ bool SignalingClient::connect (const juce::String& baseWssUrl,
     ws = std::make_unique<ix::WebSocket>();
     ws->setUrl (url.toStdString());
 
-    // Signaling is short-lived (seconds until the P2P link is up), so we do not
-    // want IXWebSocket's default auto-reconnect fighting an intentional close.
+    // No auto-reconnect. A reconnect re-enters the room as a fresh joiner: the
+    // server would hand out a role again and re-fire peer-joined, restarting ICE
+    // underneath a session that is already running. A dropped signaling socket
+    // costs us peer-left notifications; a reconnecting one would corrupt the
+    // session, so we take the lesser problem.
     ws->disableAutomaticReconnection();
 
     ws->setOnMessageCallback ([this] (const ix::WebSocketMessagePtr& msg)
