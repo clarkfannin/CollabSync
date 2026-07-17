@@ -32,7 +32,7 @@ namespace
             g.drawText (ownerLabel, header.getX(), header.getY(), ownerW, header.getHeight(),
                         juce::Justification::centredLeft, false);
 
-            juce::String typeText = " \xC2\xB7 " + typeLabel; // " · Audio" / " · MIDI"
+            juce::String typeText = juce::String::fromUTF8 (" \xC2\xB7 ") + typeLabel; // " · Audio" / " · MIDI"
             int typeW = typeFont.getStringWidth (typeText);
             g.setColour (CST::textMuted34.withAlpha (0.4f));
             g.setFont (typeFont);
