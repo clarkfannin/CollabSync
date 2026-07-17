@@ -552,8 +552,8 @@ void CollabSyncProcessor::onPeerDisconnected()
 {
     peerConnected.store (false);
 
-    // If we're still hosting, rejoin the signaling room so we're ready for a
-    // new friend to connect without the host needing to do anything.
+    // If we are still in the session, retake our seat in the room so the peer
+    // can come straight back without either side pressing anything.
     //
     // This runs on a network callback thread: the signaling WebSocket's own
     // thread for "peer left", or the libjuice agent thread for ICE failure.
@@ -562,14 +562,14 @@ void CollabSyncProcessor::onPeerDisconnected()
     // system_error and terminates the host. Defer to the message thread so
     // teardown never runs on a thread it is about to destroy, and so all
     // connect/disconnect work is serialised onto one thread.
-    if (! disconnecting.load() && hosting.load())
+    if (! disconnecting.load() && inSession.load())
     {
         juce::MessageManager::callAsync ([this, alive = alive]
         {
             if (! alive->load())
                 return;
             // Re-check: state may have changed between posting and running.
-            if (! disconnecting.load() && hosting.load())
+            if (! disconnecting.load() && inSession.load())
                 connect ("SYNC", signalingHost);
         });
     }
@@ -712,50 +712,26 @@ juce::AudioProcessorEditor* CollabSyncProcessor::createEditor()
 }
 
 //==============================================================================
-void CollabSyncProcessor::startSessionServer()
+void CollabSyncProcessor::joinSession()
 {
-    // No local server to run any more: hosting means joining the Worker room
-    // first (which makes us the ICE controlling side). The guest joins the same
-    // room code. NOTE: the room code is currently fixed to "SYNC"; per-pair room
-    // codes arrive with the UI redesign so multiple pairs can share one Worker.
-    hosting.store (true);
+    // Take a seat in the room. Whoever arrives first is told "host" by the
+    // signaling server and becomes the ICE controlling side -- that is the
+    // server's call, not ours, so there is nothing to choose here.
+    // NOTE: the room code is fixed to "SYNC"; per-pair codes would be needed
+    // before more than one pair could share a Worker.
+    inSession.store (true);
     connect ("SYNC", signalingHost);
 }
 
-void CollabSyncProcessor::stopSessionServer()
+void CollabSyncProcessor::leaveSession()
 {
-    hosting.store (false); // clear first so onPeerDisconnected doesn't auto-rejoin
+    inSession.store (false); // clear first so onPeerDisconnected doesn't auto-rejoin
     disconnect();
 }
 
-bool CollabSyncProcessor::isHostingSession() const
+bool CollabSyncProcessor::isInSession() const
 {
-    return hosting.load();
-}
-
-int CollabSyncProcessor::getSessionPeerCount() const
-{
-    // Remote peers currently in the session (0 or 1).
-    return peerConnected.load() ? 1 : 0;
-}
-
-juce::String CollabSyncProcessor::getSessionTailscaleIP() const
-{
-    // Vestigial: the ICE model has no single per-peer IP to advertise. Kept for
-    // editor API compatibility until the redesigned UI drops the IP readout.
-    return {};
-}
-
-juce::String CollabSyncProcessor::getSessionErrorMessage() const
-{
-    return currentStatus.startsWith ("ERROR") ? currentStatus : juce::String();
-}
-
-juce::String CollabSyncProcessor::getLocalTailscaleIP() const
-{
-    // Vestigial: peers pair by room code, not by IP. Returns empty so the old
-    // "your IP" readout is simply blank on this branch.
-    return {};
+    return inSession.load();
 }
 
 //==============================================================================

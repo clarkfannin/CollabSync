@@ -21,39 +21,25 @@ CollabSyncEditor::CollabSyncEditor (CollabSyncProcessor& p)
 
     addAndMakeVisible (connectionStatus);
 
-    // ---- Host section (this instance hosting) ----
-    addAndMakeVisible (hostSectionLabel);
-    addAndMakeVisible (hostPeerStatus);
+    // ---- Session section ----
+    addAndMakeVisible (sessionSectionLabel);
+    addAndMakeVisible (sessionPeerStatus);
 
-    idleHelperLabel.setText ("Start a session for your friend to join.", juce::dontSendNotification);
+    // fromUTF8 + escapes for anything non-ASCII: juce::String(const char*) reads
+    // bytes above 127 as Latin-1, so a literal em dash renders as mojibake.
+    idleHelperLabel.setText (juce::String::fromUTF8 ("Hit Join \xE2\x80\x94 your friend hits Join too."),
+                              juce::dontSendNotification);
     idleHelperLabel.setFont (lnf.sans (13.0f, 400));
     idleHelperLabel.setColour (juce::Label::textColourId, CST::textMuted42);
     idleHelperLabel.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (idleHelperLabel);
 
-    addAndMakeVisible (startSessionButton);
-    addAndMakeVisible (hostIPReadout);
-    addAndMakeVisible (copyIPButton);
-    addAndMakeVisible (stopSessionButton);
+    addAndMakeVisible (joinButton);
+    addAndMakeVisible (sessionReadout);
+    addAndMakeVisible (leaveButton);
 
-    startSessionButton.onClick = [this] { proc.startSessionServer(); updateUI(); };
-    stopSessionButton.onClick  = [this] { proc.stopSessionServer();  updateUI(); };
-    copyIPButton.onClick       = [this]
-    {
-        auto ip = proc.getLocalTailscaleIP();
-        if (ip.isNotEmpty())
-            juce::SystemClipboard::copyTextToClipboard (ip);
-    };
-
-    // ---- Join section (joining a session someone else started) ----
-    addAndMakeVisible (joinSectionLabel);
-    addAndMakeVisible (connectButton);
-    addAndMakeVisible (disconnectButton);
-
-    // Empty host: use the endpoint compiled in at build time. connect() only
-    // treats this argument as an override when it is a ws(s):// URL.
-    connectButton.onClick    = [this] { proc.connect ("SYNC", {}); };
-    disconnectButton.onClick = [this] { proc.disconnect(); };
+    joinButton.onClick  = [this] { proc.joinSession();  updateUI(); };
+    leaveButton.onClick = [this] { proc.leaveSession(); updateUI(); };
 
     // ---- Record ----
     addAndMakeVisible (recordButton);
@@ -229,56 +215,40 @@ void CollabSyncEditor::resized()
 
     placeDivider();
 
-    // ---- Host section ----
-    bool hosting = proc.isHostingSession();
+    // ---- Session section ----
+    bool inSession = proc.isInSession();
     {
-        hostSectionLabel.setBounds (pad, y, 100, 16);
-        hostPeerStatus.setBounds (pad, y, contentW, 16);
+        sessionSectionLabel.setBounds (pad, y, 100, 16);
+        sessionPeerStatus.setBounds (pad, y, contentW, 16);
         y += 16 + 9;
 
-        if (hosting)
+        if (inSession)
         {
             idleHelperLabel.setVisible (false);
-            startSessionButton.setVisible (false);
-            hostIPReadout.setVisible (true);
-            copyIPButton.setVisible (true);
-            stopSessionButton.setVisible (true);
+            joinButton.setVisible (false);
+            sessionReadout.setVisible (true);
+            leaveButton.setVisible (true);
 
-            const int copyW = 96;
-            hostIPReadout.setBounds (CST::expandedForShadow ({ pad, y, contentW - copyW - CST::gridGap, 52 }));
-            copyIPButton.setBounds (CST::expandedForShadow ({ pad + contentW - copyW, y, copyW, 52 }));
+            // Full width now: there is no IP left to copy, so no button beside it.
+            sessionReadout.setBounds (CST::expandedForShadow ({ pad, y, contentW, 52 }));
             y += 52 + 14;
 
-            stopSessionButton.setBounds (CST::expandedForShadow ({ pad, y, contentW, 52 }));
+            leaveButton.setBounds (CST::expandedForShadow ({ pad, y, contentW, 52 }));
             y += 52;
         }
         else
         {
             idleHelperLabel.setVisible (true);
-            startSessionButton.setVisible (true);
-            hostIPReadout.setVisible (false);
-            copyIPButton.setVisible (false);
-            stopSessionButton.setVisible (false);
+            joinButton.setVisible (true);
+            sessionReadout.setVisible (false);
+            leaveButton.setVisible (false);
 
             idleHelperLabel.setBounds (pad, y, contentW, 18);
             y += 18 + 14;
 
-            startSessionButton.setBounds (CST::expandedForShadow ({ pad, y, contentW, 56 }));
+            joinButton.setBounds (CST::expandedForShadow ({ pad, y, contentW, 56 }));
             y += 56;
         }
-    }
-
-    placeDivider();
-
-    // ---- Join section ----
-    {
-        joinSectionLabel.setBounds (pad, y, 140, 16);
-        y += 16 + 9;
-
-        int btnW = (contentW - CST::gridGap) / 2;
-        connectButton.setBounds (CST::expandedForShadow ({ pad, y, btnW, 52 }));
-        disconnectButton.setBounds (CST::expandedForShadow ({ pad + btnW + CST::gridGap, y, btnW, 52 }));
-        y += 52;
     }
 
     y += 20; // spacer before the record button
@@ -341,7 +311,7 @@ void CollabSyncEditor::updateUI()
     bool connected    = proc.isConnected();
     bool recording    = proc.isRecording();
     bool countingDown = proc.isCountingDown();
-    bool hosting      = proc.isHostingSession();
+    bool inSession      = proc.isInSession();
     bool hasSession   = proc.lastSessionDir.isDirectory();
 
     // ---- Header connection status + Host peer status ----
@@ -368,12 +338,12 @@ void CollabSyncEditor::updateUI()
         hostText = "Peer Connected";
         hostTextCol = CST::mintBright; hostGlowCol = CST::mint; hostGlow = true;
     }
-    else if (hosting)
+    else if (inSession)
     {
         headerText = juce::String::fromUTF8 ("Waiting for peer\xE2\x80\xA6");
         headerDot = CST::amber; headerDotOn = true; headerPulse = true;
         headerTextCol = CST::amberBright; headerGlowCol = CST::amber; headerGlow = true;
-        hostText = juce::String::fromUTF8 ("Hosting \xE2\x80\x94 Waiting");
+        hostText = juce::String::fromUTF8 ("Waiting \xE2\x80\x94 1 of 2");
         hostTextCol = CST::amberBright; hostGlowCol = CST::amber; hostGlow = true;
     }
     else
@@ -388,9 +358,9 @@ void CollabSyncEditor::updateUI()
     connectionStatus.setStatus (headerText, headerDot, headerDotOn, headerPulse,
                                  headerTextCol, headerGlowCol, headerGlow);
 
-    hostPeerStatus.setStyle (lnf.mono (12.0f, 400), hostTextCol, hostGlowCol, hostGlow,
+    sessionPeerStatus.setStyle (lnf.mono (12.0f, 400), hostTextCol, hostGlowCol, hostGlow,
                               juce::Justification::centredRight);
-    hostPeerStatus.setText (hostText);
+    sessionPeerStatus.setText (hostText);
 
     // ---- Record button ----
     RecordButton::State rs = RecordButton::State::disabled;
@@ -403,10 +373,10 @@ void CollabSyncEditor::updateUI()
     // ---- Status strip ----
     bool midiLive  = recording && proc.anyMidiNoteHeld();
     bool audioLive = recording && proc.getInputAudioLevel() > 0.02f;
-    bool connPending = hosting && ! connected;
+    bool connPending = inSession && ! connected;
 
     std::array<IndicatorStrip::Indicator, 5> inds { {
-        { "Conn",  connected || hosting, connPending, connPending ? CST::amber : CST::mint },
+        { "Conn",  connected || inSession, connPending, connPending ? CST::amber : CST::mint },
         { "Sync",  connected,            false,       CST::mint },
         { "MIDI",  midiLive,             false,       CST::mint },
         { "Audio", audioLive,            false,       CST::mint },
@@ -414,20 +384,21 @@ void CollabSyncEditor::updateUI()
     } };
     indicatorStrip.setIndicators (inds);
 
-    // ---- Host section ----
+    // ---- Session section ----
     // The room-code model has no IP to share: the friend joins with the same
     // (baked-in) room code by clicking Connect, so there is nothing to copy.
     // Show the session state here instead of an IP readout.
-    if (hosting)
-        hostIPReadout.setValue (connected ? "Peer connected" : "Waiting for peer…",
+    // Seats taken, so "nothing is happening yet" reads as progress rather than
+    // a stall: you are in, your friend is not here yet.
+    if (inSession)
+        sessionReadout.setValue (connected ? juce::String::fromUTF8 ("Peer connected \xE2\x80\x94 2 of 2")
+                                           : juce::String::fromUTF8 ("Waiting for peer \xE2\x80\x94 1 of 2"),
                                 connected ? CST::mint : CST::amber);
     else
-        hostIPReadout.setValue ("Ready", CST::textMuted32);
-    copyIPButton.setEnabled (false);
+        sessionReadout.setValue ("Ready", CST::textMuted32);
 
-    startSessionButton.setEnabled (! hosting && ! connected);
-    connectButton.setEnabled (! connected && ! countingDown && ! hosting);
-    disconnectButton.setEnabled (connected && ! recording && ! countingDown);
+    joinButton.setEnabled (! inSession && ! connected);
+    leaveButton.setEnabled (! recording && ! countingDown);
 
     // ---- Generated files ----
     if (hasSession)

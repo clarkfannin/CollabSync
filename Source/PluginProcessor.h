@@ -72,17 +72,13 @@ public:
     void triggerRecord (); // sends countdown to both peers, then starts recording
     void triggerStop   (); // stops recording on both peers
 
-    // Session hosting. With the Cloudflare Worker model there is no local server
-    // to run — "hosting" simply means we joined the room first (ICE controlling
-    // side). These keep the previous editor's API; some values are vestigial in
-    // the new model (see PluginProcessor.cpp) pending the UI redesign merge.
-    void startSessionServer();
-    void stopSessionServer();
-    bool isHostingSession()    const;
-    int  getSessionPeerCount() const;
-    juce::String getSessionTailscaleIP()  const; // vestigial: no per-peer IP in the ICE model
-    juce::String getSessionErrorMessage() const;
-    juce::String getLocalTailscaleIP()    const; // vestigial: room code replaces IP sharing
+    // Session membership. There is no server to start and no host/guest choice
+    // to make: both peers join the same room and the signaling server assigns
+    // ICE roles by arrival order. "In a session" means we are in the room and
+    // want to stay -- it is what makes us rejoin if the peer drops.
+    void joinSession();
+    void leaveSession();
+    bool isInSession() const;
 
     // PeerConnection::Listener — countdown/stop
     void onCountdownReceived (float bpm) override;
@@ -142,7 +138,7 @@ private:
 
     // Core components
     std::unique_ptr<PeerConnection>   peer;
-    std::atomic<bool>                 hosting { false }; // we initiated the room (ICE controlling)
+    std::atomic<bool>                 inSession { false }; // in the room and want to stay (drives auto-rejoin)
     std::unique_ptr<OpusEncoder>    encoder;
     std::unique_ptr<OpusDecoder>    decoder;
     std::unique_ptr<JitterBuffer>   jitterBuffer;

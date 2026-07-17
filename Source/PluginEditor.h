@@ -37,24 +37,19 @@ private:
     ConnectionStatusView connectionStatus { lnf };
 
     //==================================================================
-    // Host section (this instance hosting its own session)
-    SectionLabel hostSectionLabel   { lnf, "Host" };
-    GlowLabel    hostPeerStatus;
+    // Session section. One room with two seats: you Join, your friend Joins,
+    // you are connected. There is deliberately no host/guest choice — the
+    // signaling server assigns ICE roles by arrival order, so offering the
+    // choice would only imply control the protocol does not give us. Hence one
+    // button, and no address to type (the endpoint is compiled in).
+    SectionLabel sessionSectionLabel { lnf, "Session" };
+    GlowLabel    sessionPeerStatus;
 
     juce::Label       idleHelperLabel;
-    NeumorphicButton  startSessionButton  { "Start Session", lnf, 700, CST::cream, 16.0f };
+    NeumorphicButton  joinButton      { "Join", lnf, 700, CST::cream, 16.0f };
 
-    ReadoutWell       hostIPReadout       { lnf };
-    NeumorphicButton  copyIPButton        { "Copy IP", lnf, 600, juce::Colour (0xffcfe6da), 13.0f };
-    NeumorphicButton  stopSessionButton   { "Stop Session", lnf, 600, CST::creamAlpha (0.72f), 15.0f };
-
-    //==================================================================
-    // Join section (joining a session someone else started). There is no
-    // address to type: peers meet in a room on the signaling endpoint that is
-    // compiled in (see CMakeLists.txt), so joining is just a button.
-    SectionLabel      joinSectionLabel    { lnf, "Join" };
-    NeumorphicButton  connectButton       { "Connect", lnf, 700, CST::cream, 15.0f };
-    NeumorphicButton  disconnectButton    { "Disconnect", lnf, 600, CST::creamAlpha (0.55f), 15.0f };
+    ReadoutWell       sessionReadout  { lnf };
+    NeumorphicButton  leaveButton     { "Leave", lnf, 600, CST::creamAlpha (0.72f), 15.0f };
 
     //==================================================================
     // Record + status strip
