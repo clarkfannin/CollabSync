@@ -1,6 +1,6 @@
 {
   "name": "collabsync-signaling",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "CollabSync WebRTC/ICE signaling server (Cloudflare Worker + Durable Object). Rendezvous only — never sees audio/MIDI.",
   "scripts": {
