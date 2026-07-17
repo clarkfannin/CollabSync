@@ -96,7 +96,7 @@ bool PeerConnection::connect (const juce::String& signalingServerUrl, const juce
         // room_full is the expected "two people are already in there" case
         // rather than a fault, so it gets plain language instead of a raw code.
         if (r == "room_full")
-            setStatus ("Server at capacity — a session is already in progress");
+            setStatus (juce::String::fromUTF8 ("Server at capacity \xE2\x80\x94 a session is already in progress"));
         else
             setStatus ("Signaling error: " + juce::String (r));
     };
