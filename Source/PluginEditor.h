@@ -49,9 +49,10 @@ private:
     NeumorphicButton  stopSessionButton   { "Stop Session", lnf, 600, CST::creamAlpha (0.72f), 15.0f };
 
     //==================================================================
-    // Host IP section (joining a remote host)
-    SectionLabel      hostIPSectionLabel  { lnf, "Host IP" };
-    EditableWell      hostIPInput         { lnf };
+    // Join section (joining a session someone else started). There is no
+    // address to type: peers meet in a room on the signaling endpoint that is
+    // compiled in (see CMakeLists.txt), so joining is just a button.
+    SectionLabel      joinSectionLabel    { lnf, "Join" };
     NeumorphicButton  connectButton       { "Connect", lnf, 700, CST::cream, 15.0f };
     NeumorphicButton  disconnectButton    { "Disconnect", lnf, 600, CST::creamAlpha (0.55f), 15.0f };
 

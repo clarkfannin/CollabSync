@@ -45,16 +45,14 @@ CollabSyncEditor::CollabSyncEditor (CollabSyncProcessor& p)
             juce::SystemClipboard::copyTextToClipboard (ip);
     };
 
-    // ---- Host IP section (joining a remote host) ----
-    addAndMakeVisible (hostIPSectionLabel);
-    addAndMakeVisible (hostIPInput);
-    hostIPInput.getEditor().setText (proc.signalingHost, juce::dontSendNotification);
-    hostIPInput.getEditor().setTextToShowWhenEmpty ("localhost", CST::textMuted32);
-
+    // ---- Join section (joining a session someone else started) ----
+    addAndMakeVisible (joinSectionLabel);
     addAndMakeVisible (connectButton);
     addAndMakeVisible (disconnectButton);
 
-    connectButton.onClick    = [this] { proc.connect ("SYNC", hostIPInput.getEditor().getText().trim()); };
+    // Empty host: use the endpoint compiled in at build time. connect() only
+    // treats this argument as an override when it is a ws(s):// URL.
+    connectButton.onClick    = [this] { proc.connect ("SYNC", {}); };
     disconnectButton.onClick = [this] { proc.disconnect(); };
 
     // ---- Record ----
@@ -272,13 +270,10 @@ void CollabSyncEditor::resized()
 
     placeDivider();
 
-    // ---- Host IP section ----
+    // ---- Join section ----
     {
-        hostIPSectionLabel.setBounds (pad, y, 140, 16);
+        joinSectionLabel.setBounds (pad, y, 140, 16);
         y += 16 + 9;
-
-        hostIPInput.setBounds (CST::expandedForShadow ({ pad, y, contentW, 52 }));
-        y += 52 + 14;
 
         int btnW = (contentW - CST::gridGap) / 2;
         connectButton.setBounds (CST::expandedForShadow ({ pad, y, btnW, 52 }));
