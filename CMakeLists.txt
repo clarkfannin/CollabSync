@@ -82,6 +82,10 @@ set(USE_TLS ON CACHE BOOL "" FORCE)
 # zlib only enables per-message deflate, which signaling does not need, and the
 # Windows runner has no zlib for find_package to locate.
 set(USE_ZLIB OFF CACHE BOOL "" FORCE)
+# We link it statically and never install it. Its install(EXPORT) also fails
+# to generate when it links our in-tree mbedtls targets, which are in no
+# export set.
+set(IXWEBSOCKET_INSTALL OFF CACHE BOOL "" FORCE)
 if(APPLE)
     # Native TLS: no third-party TLS library needed on macOS.
     set(USE_SECURE_TRANSPORT ON CACHE BOOL "" FORCE)
