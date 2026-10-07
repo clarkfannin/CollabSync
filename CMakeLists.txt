@@ -105,6 +105,9 @@ else()
     set(MBEDTLS_LIBRARY    mbedtls    CACHE STRING "" FORCE)
     set(MBEDX509_LIBRARY   mbedx509   CACHE STRING "" FORCE)
     set(MBEDCRYPTO_LIBRARY mbedcrypto CACHE STRING "" FORCE)
+    # IXWebSocket picks the mbedTLS 3.x API only if find_path locates
+    # mbedtls/build_info.h, which it cannot for an in-tree checkout.
+    set(MBEDTLS_VERSION_GREATER_THAN_3 "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
 endif()
 FetchContent_Declare(ixwebsocket
     GIT_REPOSITORY https://github.com/machinezone/IXWebSocket.git
