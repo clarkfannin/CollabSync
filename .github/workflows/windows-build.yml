@@ -39,7 +39,11 @@ jobs:
         if: steps.cache-juce.outputs.cache-hit != 'true'
         run: git clone --depth 1 --branch ${{ env.JUCE_VERSION }} https://github.com/juce-framework/JUCE.git JUCE
 
+      # The signaling URL is a repo secret so the personal Worker subdomain stays
+      # out of the public repo; CMakeLists.txt reads it from the environment.
       - name: Configure
+        env:
+          COLLABSYNC_SIGNALING_URL: ${{ secrets.COLLABSYNC_SIGNALING_URL }}
         run: >
           cmake -B build
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
